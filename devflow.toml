@@ -1,0 +1,26 @@
+# devflow 2: Einstellungen dieses Projekts (alle optional)
+# test: Testbefehl im Worktree; Läufe auf server gehen über ops/testlauf.sh
+test = "PYTHONPATH=.:tests2 $HOME/.local/share/devflow2/venv/bin/python -B -m unittest discover -s tests2 -v"
+# deploy: Befehl nach dem Merge im Haupt-Checkout: Dashboard-Dienst neu starten und /health prüfen
+deploy = "ops/web_deploy.sh"
+# entwickler = "claude"   # Standard-Entwickler (claude oder sol)
+# reviewer = "sol"        # Standard-Reviewer
+# basis = "main"
+# Stufe, wenn die Planzeile keine nennt (leicht/normal/schwer, siehe DEVFLOW2.md)
+stufe = "normal"
+# devflow 1 ist eingefroren und gehört nicht in die Repo-Karte der Aufträge
+karte_auslassen = ["devflow/", "tests/", "beispiele/", "HANDY-PWA.md", "KONZEPT.md", "OWNER", "PLANUNG.md", "SYSTEMBENUTZER", "UEBERGABEN.md", "WEB-PUSH.md"]
+
+# Pflegeprüfung (docs/pflege.md): geprüft wird das venv des Dienstes; die feste Paketliste (requirements.txt) wird beim Aktualisieren von Hand nachgezogen
+[pflege]
+umgebung = "~/.local/share/devflow2/venv"
+python_quellen = []
+
+# Sol-Modell fest (Entscheidung des Inhabers vom 04.11.2026): nicht das Codex-Standardmodell, das auf gpt-6-astra stand und viel Kontingent frisst
+[stufen.leicht]
+sol_modell = "gpt-6.1-sol"
+[stufen.normal]
+sol_modell = "gpt-6.1-sol"
+sol_effort = "high"
+[stufen.schwer]
+sol_modell = "gpt-6.1-sol"

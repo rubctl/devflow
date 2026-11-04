@@ -1,0 +1,19 @@
+[Unit]
+Description=devflow 2 Dashboard (Lese-Oberfläche, nur 127.0.0.1:8478)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/devflow
+Environment=PYTHONPATH=%h/dev/devflow
+ExecStart=%h/.local/share/devflow2/venv/bin/python -B -m devflow2 web
+Restart=always
+RestartSec=5
+# Läufe, die der Dienst später startet (setsid), überleben Neustart und Stopp
+KillMode=process
+MemoryHigh=512M
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

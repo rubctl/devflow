@@ -1,0 +1,12 @@
+# Geheimnisse nie ins Repo
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.DS_Store

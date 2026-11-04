@@ -1,0 +1,9 @@
+# devflow 2: Einstellungen dieses Projekts (alle optional)
+# basis: Branch, auf dem devflow Status und Pläne committet und in den gemergt wird (kommt aus dem Repo, nicht fest `main`)
+basis = "{{BASIS}}"
+# test: Testbefehl im Worktree; Läufe auf server gehen über ops/testlauf.sh
+test = ""
+# deploy: Befehl nach dem Merge im Haupt-Checkout; leer = kein automatischer Deploy (z. B. solange die Zielumgebung offen ist)
+deploy = ""
+# entwickler = "claude"   # Standard-Entwickler (claude oder sol)
+# reviewer = "sol"        # Standard-Reviewer
