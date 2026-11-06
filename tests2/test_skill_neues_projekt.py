@@ -45,6 +45,10 @@ PLAN = """# Vorhaben · Erster Schritt · Claude · 03.11.2026
 
 **Stand:** Entwurf
 
+## Kurz
+
+- Probe.
+
 ## Ziel
 
 Probe.

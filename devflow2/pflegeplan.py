@@ -302,7 +302,8 @@ def _sortieren(e, plan, gewaehlt, bedenken, d, status):
 def _entwurf_text(heute, nr, fragen, plan, p):
     zeilen = [f'| {roadmap.zelle(k["paket"])} | {k["von"] or "–"} | {k["nach"] or "–"} | {roadmap.zelle(k["grund"])} |' for k in fragen]
     return '\n'.join([
-        f'# Vorhaben Pflege-Update {heute} · devflow · {datum()}', '', '**Stand:** Entwurf', '', '## Ziel', '',
+        f'# Vorhaben Pflege-Update {heute} · devflow · {datum()}', '', '**Stand:** Entwurf', '', '## Kurz', '',
+        f'- Entscheidung: {len(fragen)} Update(s) aus der Pflegeprüfung freigeben oder ablehnen ({", ".join(sorted({k["paket"] for k in fragen}))}).', '', '## Ziel', '',
         f'Diese Updates aus der Pflegeprüfung laufen nicht unter dem Pflegeplan und brauchen {_i.besitz("Entscheidung", "die")}.', '',
         '| Paket | Aktuell | Neu | Grund |', '|---|---|---|---|', *zeilen, '', '## Aufgaben', '',
         roadmap.PLANKOPF_STUFE, '|---|---|---|---|---|---|',

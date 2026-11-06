@@ -1,0 +1,10 @@
+# Katalog äußerer Faktoren: als discovery/faktoren.toml ablegen.
+# Ein Faktor ist etwas von außen, das Prozesse formt. Prozesse nennen ihn in `faktoren = ["F-…"]`.
+# Prüfen mit: python -m devflow2 discovery pruefen
+
+# [[faktor]]
+# id = "F-REG-01"                          # frei wählbar, eindeutig
+# art = "Vorschrift"                       # Vorschrift, Kunde, Partner, System, Markt/Saison, Organisation
+# name = "Beispiel: Aufbewahrungspflicht für Belege"
+# quelle = "I-01"                          # Interviewnummer, Dokument oder Gesetz (öffentlich zitierbar)
+# aendert_sich = 2027-01-01                # Stichtag (JJJJ-MM-TT oder "TT.MM.JJJJ"); Text wie "jährlich" ist erlaubt; weglassen, wenn nichts bekannt

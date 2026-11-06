@@ -57,7 +57,8 @@ class Hilfe(Basis):
         git(v['worktree'], 'add', '-A')
         git(v['worktree'], 'commit', '-q', '-m', 'docs: Review')
         kopf = git(v['worktree'], 'rev-parse', 'HEAD')
-        self.eintrag('review', v, modell='sol', reviewer='sol', urteil=urteil, befunde=[], commit=commit, kopf=kopf)
+        self.eintrag('review', v, modell='sol', reviewer='sol', urteil=urteil, befunde=[], commit=commit, kopf=kopf,
+                     basis_commit=v['start'], test_commit=commit)  # wie `vorschlag._pruefen` nach grünen Tests
         v['commit'] = kopf
         vorschlag._sichern(v)
 
@@ -279,11 +280,11 @@ class SperreTest(Hilfe):
     def test_unregistrierter_traumbranch_ist_gesperrt(self):
         git(self.repo, 'branch', 'traum/fremd')
         with self.assertRaisesRegex(Fehler, 'nicht registriert'):
-            vorschlag.merge_tor(self.p, 'traum/fremd', 'X1', [])
+            vorschlag.merge_tor(self.p, 'traum/fremd', 'X1')
 
     def test_gleicher_name_ohne_register_ist_gesperrt(self):
         with self.assertRaisesRegex(Fehler, 'nicht registriert'):
-            vorschlag.merge_tor(self.p, 'claude-x', 'traum-20260101-000000-x', [])
+            vorschlag.merge_tor(self.p, 'claude-x', 'traum-20260101-000000-x')
 
     def test_aufgabe_mit_vorschlagsid_laesst_sich_nicht_anlegen(self):
         with self.assertRaisesRegex(Fehler, 'Übernehmen'):
@@ -293,14 +294,14 @@ class SperreTest(Hilfe):
         self.bereit()
         git(self.repo, 'branch', 'claude-a1', BRANCH)
         with self.assertRaisesRegex(Fehler, 'nicht übernommen'):
-            vorschlag.merge_tor(self.p, 'claude-a1', 'A1', [])
+            vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
     def test_anderer_branch_bringt_den_baucommit_nicht_ohne_reviewbericht_mit(self):
         v = self.bereit()
         self.assertNotEqual(v['bau'], v['commit'])
         git(self.repo, 'branch', 'claude-a1', v['bau'])
         with self.assertRaisesRegex(Fehler, 'nicht übernommen'):
-            vorschlag.merge_tor(self.p, 'claude-a1', 'A1', [])
+            vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
     def test_normale_kette_mergt_den_baucommit_nicht(self):
         v = self.bereit()
@@ -321,12 +322,12 @@ class SperreTest(Hilfe):
         self.eintrag('mergen', v, modell='intern', rebase_kopf=kopf)
         git(self.repo, 'branch', 'claude-a1', kopf)
         with self.assertRaisesRegex(Fehler, 'nicht übernommen'):
-            vorschlag.merge_tor(self.p, 'claude-a1', 'A1', [])
+            vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
     def test_normaler_branch_bleibt_frei(self):
         self.bereit()
         git(self.repo, 'branch', 'claude-a1', 'main')
-        vorschlag.merge_tor(self.p, 'claude-a1', 'A1', [])
+        vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
 
 class DeployTest(Hilfe):
@@ -357,6 +358,27 @@ class DeployTest(Hilfe):
         laeufe.speichern({**laeufe.laden(l['id']), 'zustand': 'fehler'})
         with self.assertRaisesRegex(Fehler, 'kein Deploy'):
             ablauf.fortsetzen(l['id'])
+
+    def test_vorschlag_ohne_freigabe_nach_rebase_auch_deploy_gesperrt(self):
+        """S14.2: Der Rebase vor dem Review erzeugt neue Hashes; auch sie bleiben gesperrt, wenn die Freigabe wegfällt."""
+        v = self.bereit(review=None)
+        (self.repo / 'neu.txt').write_text('von main\n')
+        git(self.repo, 'add', 'neu.txt')
+        git(self.repo, 'commit', '-q', '-m', 'fachlich auf main')
+        self.drehbuch(codex=[{'tue': 'fehler', 'text': 'Review bricht ab'}])
+        vorschlag.uebernehmen(VID, v['commit'], 'dashboard')
+        self.ruhig()
+        neu = self.kopf()
+        self.assertNotEqual(neu, v['commit'])
+        self.assertIn(neu, vorschlag._rebases(self.p, v))
+        w = vorschlag.laden(VID)
+        vorschlag._zurueck(self.p, w, neu, False)  # die Zustimmung verfällt, wie nach einer Änderung am Branch
+        git(self.repo, 'merge', '-q', '--no-edit', neu)  # von Hand am Werkzeug vorbei
+        with self.assertRaisesRegex(Exception, 'kein Deploy'):
+            mcp_server.deployen('demo')
+        git(self.repo, 'branch', 'claude-a1', neu)
+        with self.assertRaisesRegex(Fehler, 'nicht übernommen'):
+            vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
     def test_ohne_vorschlag_in_main_geht_der_deploy(self):
         self.bereit()
@@ -400,7 +422,8 @@ class UebernehmenTest(Hilfe):
         v = self.bereit(review=None)
         self.drehbuch(codex=[{'tue': 'schlafen', 's': 30}])
         self.assertEqual(vorschlag.uebernehmen(VID, v['commit'], 'dashboard'), 'review')
-        self.assertEqual([l['art'] for l in laeufe.alle('demo', VID) if l['zustand'] in laeufe.AKTIV], ['review'])
+        self.warten(lambda: [l['art'] for l in laeufe.alle('demo', VID) if l['zustand'] in laeufe.AKTIV] == ['review'], text='bis Review')
+        self.assertEqual([l['art'] for l in laeufe.alle('demo', VID)][-2:], ['vorbereiten', 'review'])  # erst Rebase und Tests
         self.assertEqual(self.merges(), [])
         self.assertEqual(self.zeile(VID)[3], 'Review')
 
@@ -413,6 +436,34 @@ class UebernehmenTest(Hilfe):
         self.assertTrue(self.gemergt())
         self.assertEqual(vorschlag.laden(VID)['zustand'], 'gemergt')
         self.assertTrue((self.repo / f'berichte/{VID}-review-sol.md').exists())
+
+    def fachlich_auf_main(self):
+        (self.repo / 'neu.txt').write_text('von main\n')
+        git(self.repo, 'add', 'neu.txt')
+        git(self.repo, 'commit', '-q', '-m', 'fachlich auf main')
+
+    def test_rebase_vor_dem_review_behaelt_die_freigabe(self):
+        """S14.2: Die Vorbereitung rebased den übernommenen Stand; devflows Rebase und Reviewbericht gehören zur Herkunft, der Merge geht durch."""
+        v = self.bereit(review=None)
+        self.fachlich_auf_main()
+        self.drehbuch(codex=[self.bestanden()])
+        self.assertEqual(vorschlag.uebernehmen(VID, v['commit'], 'dashboard'), 'review')
+        self.warten(lambda: vorschlag.laden(VID)['zustand'] == 'gemergt', text='bis Merge')
+        self.ruhig()
+        vb = next(l for l in laeufe.alle('demo', VID) if l['art'] == 'vorbereiten')
+        self.assertEqual(vb['rebases'][0]['ausgang'], v['commit'])
+        self.assertTrue(self.gemergt())
+        self.assertTrue((self.repo / 'neu.txt').exists())
+
+    def test_bestandenes_traumreview_auf_altem_main_bringt_neues_review(self):
+        v = self.bereit()
+        self.fachlich_auf_main()
+        self.drehbuch(codex=[self.bestanden()])
+        self.assertEqual(vorschlag.uebernehmen(VID, v['commit'], 'dashboard'), 'review')
+        self.warten(lambda: vorschlag.laden(VID)['zustand'] == 'gemergt', text='bis Merge')
+        self.ruhig()
+        self.assertEqual([l['art'] for l in laeufe.alle('demo', VID)][-3:], ['vorbereiten', 'review', 'mergen'])
+        self.assertTrue(self.gemergt())
 
     def test_fehlt_das_gegenreview_bleibt_merge_gesperrt(self):
         v = self.bereit(review=None)
@@ -525,17 +576,17 @@ class UebernehmenTest(Hilfe):
         v = self.bereit()
         vorschlag.verwerfen(VID, 'dashboard')
         with self.assertRaisesRegex(Fehler, 'ist verworfen'):
-            vorschlag.merge_tor(self.p, BRANCH, VID, [])
+            vorschlag.merge_tor(self.p, BRANCH, VID)
         git(self.repo, 'branch', 'claude-a1', v['commit'])
         with self.assertRaisesRegex(Fehler, 'nicht übernommen'):
-            vorschlag.merge_tor(self.p, 'claude-a1', 'A1', [])
+            vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
     def test_verworfener_baucommit_wird_nicht_gemergt(self):
         v = self.bereit()
         git(self.repo, 'branch', 'claude-a1', v['bau'])  # vor dem Verwerfen abgezweigt, also bleibt der Commit erreichbar
         vorschlag.verwerfen(VID, 'dashboard')
         with self.assertRaisesRegex(Fehler, 'nicht übernommen'):
-            vorschlag.merge_tor(self.p, 'claude-a1', 'A1', [])
+            vorschlag.merge_tor(self.p, 'claude-a1', 'A1')
 
 
 class VerwerfenTest(Hilfe):
@@ -715,12 +766,15 @@ class WebTest(Hilfe):
         self.drehbuch(codex=[{'tue': 'schlafen', 's': 30}])
         r = self.client().post(f'/traum/vorschlag/{VID}/uebernehmen', data={'gesehen': v['commit']}, headers=HERKUNFT)
         self.assertEqual((r.status_code, r.headers['location']), (303, '/traum?meldung=vorschlag-review#vorschlaege'))
-        r = self.client().post(f'/traum/vorschlag/{VID}/verwerfen', headers=HERKUNFT)
+        r = self.client().post(f'/traum/vorschlag/{VID}/verwerfen', data={'gesehen': v['commit']}, headers=HERKUNFT)
         self.assertEqual(r.status_code, 409)  # das Review läuft noch
         for l in laeufe.alle('demo', VID):
             if l['zustand'] in laeufe.AKTIV:
                 laeufe.anhalten(l['id'])
         r = self.client().post(f'/traum/vorschlag/{VID}/verwerfen', headers=HERKUNFT)
+        self.assertEqual(r.status_code, 409)  # ohne angezeigten Stand wird nichts entfernt
+        self.assertTrue(self.hat_branch())
+        r = self.client().post(f'/traum/vorschlag/{VID}/verwerfen', data={'gesehen': v['commit']}, headers=HERKUNFT)
         self.assertEqual((r.status_code, r.headers['location']), (303, '/traum?meldung=vorschlag-verworfen#vorschlaege'))
         self.assertFalse(self.hat_branch())
 

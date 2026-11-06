@@ -1,11 +1,12 @@
 """Ganze Ketten mit Hintergrundläufen und nachgebauten CLIs."""
 import os
 from pathlib import Path
+import subprocess
 import time
 import unittest
 import unittest.mock
 
-from devflow2 import Fehler, ablauf, inhaber, laeufe, roadmap
+from devflow2 import Fehler, ablauf, inhaber, laeufe, repo, roadmap
 from hilfen import PLAN, Fall, git
 
 
@@ -32,7 +33,7 @@ class KetteTest(Fall):
         self.assertIn('**in Arbeit** –', self.roadmap())
         self.assertIn('A1 gemergt', self.roadmap())
         self.assertEqual([(l['art'], l['zustand']) for l in laeufe.alle()],
-                         [('entwickeln', 'fertig'), ('test', 'fertig'), ('review', 'fertig'), ('mergen', 'fertig')])
+                         [('entwickeln', 'fertig'), ('vorbereiten', 'fertig'), ('review', 'fertig'), ('mergen', 'fertig')])
         review = self.aufrufe('codex')[0]
         self.assertIn('--output-schema', review['argv'])
         self.assertTrue(review['cwd'].endswith('demo-review-a1-1'))
@@ -68,7 +69,7 @@ class KetteTest(Fall):
                       codex=[self.bestanden()])
         self.starten()
         self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
-        self.assertEqual([l['art'] for l in laeufe.alle()], ['entwickeln', 'test', 'nacharbeit', 'test', 'review', 'mergen'])
+        self.assertEqual([l['art'] for l in laeufe.alle()], ['entwickeln', 'vorbereiten', 'nacharbeit', 'vorbereiten', 'review', 'mergen'])
         self.assertIn('Projekttests schlagen fehl', self.aufrufe('claude')[1]['argv'][-1])
         self.assertIn('kaputt gefunden', self.aufrufe('claude')[1]['argv'][-1])
 
@@ -285,8 +286,9 @@ class HandTest(Fall):
         self.drehbuch(claude=[{'tue': 'commit'}], codex=[{'tue': 'fehler', 'text': 'Not logged in. Run codex login'}, self.bestanden()])
         ablauf.entwickeln(self.p, 'A1', automatisch=False)
         self.ruhig()
-        r = ablauf.review_anfordern(self.p, 'A1', automatisch=False)
+        ablauf.review_anfordern(self.p, 'A1', automatisch=False)  # erst die Vorbereitung, dann das Review
         self.warten(lambda: self.zeile('A1')[3] == 'Braucht dich')
+        r = next(l for l in laeufe.alle('demo', 'A1') if l['art'] == 'review')
         self.assertIn('Anmeldung von codex abgelaufen', self.zeile('A1')[5])
         self.assertIn('codex login', self.zeile('A1')[5])
         ablauf.fortsetzen(r['id'])
@@ -342,29 +344,6 @@ class HandTest(Fall):
         self.assertEqual(laeufe.laden(l['id'])['zustand'], 'fertig')
         self.assertEqual(self.roadmap().count('A1 gemergt'), 1)  # kein doppelter Protokolleintrag beim Nachholen
 
-    def test_stop_nach_eigenem_rebase_ist_fortsetzbar(self):
-        """R1: Rebase durch devflow ist kein neuer Branchstand; spätere fremde Commits schon."""
-        self.review_bestanden()
-        (self.repo / 'devflow.toml').write_text(f'test = "test -f {self.tmp}/frei || sleep 30"\n')
-        git(self.repo, 'commit', '-q', '-am', 'langsamere Tests auf main')
-        l = ablauf.mergen(self.p, 'A1', automatisch=False)
-        log = laeufe.verzeichnis(l['id']) / 'log.jsonl'
-        self.warten(lambda: log.exists() and 'Tests nach Rebase' in log.read_text() and laeufe.laden(l['id']).get('kind_pid'))
-        ablauf.anhalten(l['id'])
-        wt = self.tmp / 'demo-claude-a1'
-        (wt / 'spaet.txt').write_text('x')
-        git(wt, 'add', '-A')
-        git(wt, 'commit', '-q', '-m', 'fremder Commit nach dem Rebase')
-        ablauf.fortsetzen(l['id'])
-        self.warten(lambda: laeufe.laden(l['id'])['zustand'] == 'fehler')
-        self.assertIn('nach dem bestandenen Review geändert', laeufe.laden(l['id'])['fehler'])
-        git(wt, 'reset', '-q', '--hard', 'HEAD~1')
-        (self.tmp / 'frei').write_text('')
-        ablauf.fortsetzen(l['id'])
-        self.warten(lambda: self.zeile('A1')[3] == 'erledigt' and laeufe.laden(l['id'])['zustand'] == 'fertig')
-        self.assertIn('arbeit.txt', git(self.repo, 'ls-files'))
-        self.assertNotIn('spaet.txt', git(self.repo, 'ls-files'))
-
     def remote(self, upstream):
         bare = self.tmp / 'remote.git'
         git(self.tmp, 'init', '-q', '--bare', str(bare))
@@ -409,7 +388,9 @@ class HandTest(Fall):
         l = ablauf.mergen(self.p, 'A1')
         self.warten(lambda: laeufe.laden(l['id'])['zustand'] == 'fehler')
         self.assertTrue(laeufe.laden(l['id']).get('merge'))
-        self.warten(lambda: git(self.repo, 'status', '--porcelain') == '')  # die Rücknahme folgt erst nach dem Zustand `fehler`
+        # Ursache der früheren Unruhe: `fehler` steht im Lauf, bevor `fehlgeschlagen` den Status schreibt (Commit scheitert, dann Rücknahme).
+        # Ein Blick auf `status` zwischendurch sah zufällig „sauber“. Erst nach dem Ende des Laufprozesses ist alles zurückgenommen.
+        self.warten(lambda: not laeufe.lebt(laeufe.laden(l['id'])), text='bis der Lauf beendet ist')
         self.assertEqual(git(self.repo, 'status', '--porcelain'), '')
         self.assertEqual(roadmap.finde(git(self.repo, 'show', 'HEAD:ROADMAP.md'), 'A1')[1][3], 'Review')
         hook.unlink()
@@ -437,21 +418,6 @@ class HandTest(Fall):
         git(wt, 'reset', '-q', '--hard', 'HEAD~1')
         ablauf.mergen(self.p, 'A1')
         self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
-
-    def test_rebase_ueber_neue_commits_auf_main_testet_erneut(self):
-        ablauf.plan_uebernehmen(self.p, 'plan/wetter.md')
-        self.drehbuch(claude=[{'tue': 'commit'}], codex=[self.bestanden()])
-        ablauf.entwickeln(self.p, 'A1', automatisch=False)
-        self.ruhig()
-        ablauf.review_anfordern(self.p, 'A1', automatisch=False)
-        self.ruhig()
-        (self.repo / 'kaputt').write_text('von main')
-        git(self.repo, 'add', 'kaputt')
-        git(self.repo, 'commit', '-q', '-m', 'anderer Merge')
-        l = ablauf.mergen(self.p, 'A1')
-        self.warten(lambda: self.zeile('A1')[3] == 'blockiert')
-        self.assertIn('Tests nach dem Rebase rot', laeufe.laden(l['id'])['fehler'])
-        self.assertNotIn('arbeit.txt', git(self.repo, 'ls-files'))
 
     def test_roadmap_mit_fremder_aenderung_wird_nicht_ueberschrieben(self):
         (self.repo / 'ROADMAP.md').write_text(self.roadmap() + '\nvon Hand\n')
@@ -487,6 +453,196 @@ class HandTest(Fall):
         info = ablauf.aufgabe(self.p, 'K1')
         self.assertEqual((info['status'], info['zweig'], info['laeufe']), ('entfällt', None, []))
         self.assertEqual(git(self.repo, 'status', '--porcelain'), '')
+
+
+class RebaseTest(Fall):
+    """S14.2: Rebase vor dem Review, neues Review bei fachlich neuem main, nur Statuscommits ohne Schleife."""
+    wt = property(lambda self: self.tmp / 'demo-claude-a1')
+
+    def entwickelt(self, dateien=None):
+        ablauf.plan_uebernehmen(self.p, 'plan/wetter.md')
+        self.drehbuch(claude=[{'tue': 'commit', **({'dateien': dateien} if dateien else {})}], codex=[self.bestanden()])
+        ablauf.entwickeln(self.p, 'A1', automatisch=False)
+        self.ruhig()
+        return git(self.wt, 'rev-parse', 'HEAD')
+
+    def review_bestanden(self):
+        commit = self.entwickelt()
+        ablauf.review_anfordern(self.p, 'A1', automatisch=False)
+        self.ruhig()
+        return commit
+
+    def auf_main(self, datei, inhalt, nachricht='fachlich auf main'):
+        (self.repo / datei).write_text(inhalt)
+        git(self.repo, 'add', datei)
+        git(self.repo, 'commit', '-q', '-m', nachricht)
+        return git(self.repo, 'rev-parse', 'HEAD')
+
+    def art(self, art):
+        return [l for l in laeufe.alle('demo', 'A1') if l['art'] == art]
+
+    def test_main_unveraendert_kein_rebase_und_pruefstaende_am_lauf(self):
+        commit = self.review_bestanden()
+        v, r = self.art('vorbereiten')[0], self.art('review')[0]
+        self.assertIsNone(v.get('rebase_kopf'))
+        self.assertEqual((v['ausgang'], v['kopf'], v['getestet'], v['test_rc']), (commit, commit, commit, 0))
+        self.assertEqual(git(self.wt, 'merge-base', 'HEAD', 'main'), git(self.repo, 'merge-base', commit, 'main'))  # Branch nicht umgesetzt
+        self.assertEqual((r['commit'], r['test_commit'], r['basis_commit'], r['vorbereitung']), (commit, commit, v['basis'], v['id']))
+        self.assertIn('Merge offen', self.zeile('A1')[5])
+
+    def test_main_weiter_rebase_test_review_auf_neuem_stand(self):
+        alt = self.entwickelt()
+        basis = self.auf_main('neu.txt', 'von main\n')
+        l = ablauf.review_anfordern(self.p, 'A1', automatisch=False)
+        self.assertEqual(l['art'], 'vorbereiten')
+        self.ruhig()
+        v, r = self.art('vorbereiten')[0], self.art('review')[0]
+        self.assertEqual((v['ausgang'], v['ziel']), (alt, v['basis']))
+        self.assertTrue(ok_vorfahr(self.repo, basis, v['kopf']))
+        self.assertEqual(v['rebases'], [dict(ausgang=alt, ziel=v['basis'], kopf=v['kopf'])])
+        self.assertEqual(v['rebase_kopf'], v['kopf'])
+        self.assertEqual((r['commit'], r['test_commit'], r['basis_commit']), (v['kopf'], v['kopf'], v['basis']))
+        self.assertIn('neu.txt', git(self.repo, 'ls-tree', '--name-only', r['commit']))
+        self.assertTrue(self.aufrufe('codex')[0]['cwd'].endswith('demo-review-a1-1'))
+        ablauf.mergen(self.p, 'A1')
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+        self.assertEqual(len(self.art('review')), 1)
+
+    def test_konflikt_geht_mit_pfaden_an_die_nacharbeit(self):
+        alt = self.entwickelt()
+        self.auf_main('arbeit.txt', 'von main\n')
+        self.drehbuch(claude=[{'tue': 'fehler', 'text': 'Ende der Probe'}])
+        ablauf.review_anfordern(self.p, 'A1', automatisch=True)
+        self.warten(lambda: self.art('nacharbeit') and self.art('nacharbeit')[0]['zustand'] == 'fehler', text='bis Nacharbeit')
+        v = self.art('vorbereiten')[0]
+        self.assertEqual((v['konflikt'], v['ausgang'], v['ziel']), (['arbeit.txt'], alt, v['basis']))
+        self.assertIsNone(v.get('getestet'))
+        self.assertEqual(self.art('review'), [])
+        prompt = self.aufrufe('claude')[1]['argv'][-1]
+        self.assertIn('Konflikte', prompt)
+        self.assertIn('- arbeit.txt', prompt)
+        self.assertIn('git rebase main', prompt)
+        self.assertEqual(self.aufrufe('claude')[1]['cwd'], str(self.wt))
+        self.assertFalse(repo.rebase_laeuft(self.wt))
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), alt)
+
+    def test_fachlicher_commit_nach_dem_review_bringt_neues_review(self):
+        self.review_bestanden()
+        erste = self.art('review')[0]
+        self.auf_main('neu.txt', 'von main\n')
+        with self.assertRaisesRegex(Fehler, 'fachlich geändert.*review_anfordern'):
+            ablauf.mergen(self.p, 'A1', automatisch=False)
+        self.drehbuch(codex=[self.bestanden()])
+        l = ablauf.mergen(self.p, 'A1', automatisch=True)
+        self.assertEqual(l['art'], 'vorbereiten')
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+        self.ruhig()
+        zweite = self.art('review')[1]
+        self.assertNotEqual(zweite['commit'], erste['commit'])
+        self.assertIn('neu.txt', git(self.repo, 'ls-tree', '--name-only', zweite['commit']))
+        self.assertEqual(zweite['test_commit'], zweite['commit'])
+        self.assertEqual(len(self.art('mergen')), 1)
+        self.assertIn('arbeit.txt', git(self.repo, 'ls-files'))
+
+    def test_fachlich_geaendert_waehrend_der_mergelauf_wartet(self):
+        """Auch ein schon angelegter oder fortgesetzter Mergelauf prüft neu und geht zurück zur Vorbereitung."""
+        self.review_bestanden()
+        (self.repo / 'ROADMAP.md').write_text(self.roadmap() + '\nvon Hand\n')
+        l = ablauf.mergen(self.p, 'A1')
+        self.warten(lambda: laeufe.laden(l['id'])['zustand'] == 'fehler')
+        git(self.repo, 'checkout', '--', 'ROADMAP.md')
+        self.auf_main('neu.txt', 'von main\n')
+        self.drehbuch(codex=[self.bestanden()])
+        ablauf.fortsetzen(l['id'])
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+        self.ruhig()
+        self.assertIn('fachlich geändert', laeufe.laden(l['id'])['neu_pruefen'])
+        self.assertIsNone(laeufe.laden(l['id']).get('merge'))
+        self.assertEqual(len(self.art('review')), 2)
+        self.assertEqual([x['art'] for x in laeufe.alle('demo', 'A1')][-4:], ['mergen', 'vorbereiten', 'review', 'mergen'])
+
+    def test_frage_sperrt_auch_den_fortgesetzten_mergelauf(self):
+        self.review_bestanden()
+        (self.repo / 'ROADMAP.md').write_text(self.roadmap() + '\nvon Hand\n')
+        l = ablauf.mergen(self.p, 'A1')
+        self.warten(lambda: laeufe.laden(l['id'])['zustand'] == 'fehler')
+        git(self.repo, 'checkout', '--', 'ROADMAP.md')
+        ablauf.frage_stellen(self.p, 'Wirklich?', aufgabe_id='A1')
+        with self.assertRaisesRegex(Fehler, 'Wartet auf Antwort'):
+            ablauf.fortsetzen(l['id'])
+        self.assertNotIn('arbeit.txt', git(self.repo, 'ls-files'))
+
+    def test_nur_statuscommits_merge_ohne_neues_review(self):
+        self.review_bestanden()
+        ablauf.protokoll(self.p, 'Zwischenstand')
+        ablauf.status_setzen(self.p, 'A2', 'in Arbeit')
+        ablauf.mergen(self.p, 'A1', automatisch=False)
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+        self.ruhig()
+        m = self.art('mergen')[0]
+        self.assertEqual((len(self.art('review')), len(self.art('vorbereiten'))), (1, 1))
+        self.assertTrue(m.get('rebase_kopf'))
+        self.assertIsNone(m.get('neu_pruefen'))
+        self.assertIn('Zwischenstand', git(self.repo, 'show', 'HEAD:ROADMAP.md'))
+
+    def test_statuscommit_nur_mit_autor_und_pfad(self):
+        """Ausnahme technisch geprüft: Ein Commit nur auf ROADMAP.md von Hand oder ein devflow-Commit mit weiteren Pfaden ist fachlich."""
+        basis = git(self.repo, 'rev-parse', 'HEAD')
+        ablauf.protokoll(self.p, 'Status')
+        self.assertEqual(repo.fachliche_commits(self.p, basis, 'main'), [])
+        hand = self.auf_main('ROADMAP.md', self.roadmap() + '\nvon Hand\n', 'roadmap: von Hand')
+        (self.repo / 'ROADMAP.md').write_text(self.roadmap() + '\nnoch mal\n')
+        (self.repo / 'x.py').write_text('x = 1\n')
+        git(self.repo, 'add', '-A')
+        git(self.repo, 'commit', '-q', '-m', 'roadmap: getarnt', '--author', repo.AUTOR)
+        getarnt = git(self.repo, 'rev-parse', 'HEAD')
+        self.assertEqual(repo.fachliche_commits(self.p, basis, 'main'), [hand, getarnt])
+
+    def test_roadmapcommit_von_hand_nach_dem_review_bringt_neues_review(self):
+        self.review_bestanden()
+        self.auf_main('ROADMAP.md', self.roadmap() + '\nvon Hand\n', 'roadmap: von Hand')
+        with self.assertRaisesRegex(Fehler, 'fachlich geändert'):
+            ablauf.mergen(self.p, 'A1', automatisch=False)
+
+    def test_unterbrochene_vorbereitung_kein_alter_pruefstand(self):
+        alt = self.review_bestanden()
+        frei = self.tmp / 'frei'
+        (self.repo / 'devflow.toml').write_text(f'test = "test -f {frei} || sleep 30"\n')
+        git(self.repo, 'commit', '-q', '-am', 'langsamere Tests auf main')
+        l = ablauf.review_anfordern(self.p, 'A1', automatisch=False)
+        log = laeufe.verzeichnis(l['id']) / 'log.jsonl'
+        self.warten(lambda: log.exists() and 'Tests auf' in log.read_text() and laeufe.laden(l['id']).get('kind_pid'))
+        ablauf.anhalten(l['id'])
+        neu = git(self.wt, 'rev-parse', 'HEAD')
+        self.assertNotEqual(neu, alt)
+        self.assertIsNone(ablauf._pruefstand(self.p, 'A1', neu))
+        self.assertIsNone(ablauf._pruefstand(self.p, 'A1', alt))  # der alte, fertige Prüfstand gilt nach dem Abbruch nicht mehr
+        with self.assertRaisesRegex(Fehler, 'geändert'):
+            ablauf.mergen(self.p, 'A1', automatisch=False)
+        frei.write_text('')
+        self.drehbuch(codex=[self.bestanden()])
+        ablauf.fortsetzen(l['id'])
+        self.ruhig()
+        v, r = laeufe.laden(l['id']), self.art('review')[-1]
+        self.assertEqual(len(self.art('review')), 2)
+        self.assertEqual((v['kopf'], v['getestet'], r['commit'], r['test_commit']), (neu, neu, neu, neu))
+        ablauf.mergen(self.p, 'A1', automatisch=False)
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+
+    def test_halber_rebase_wird_vor_jedem_modelllauf_abgebrochen(self):
+        alt = self.entwickelt()
+        self.auf_main('arbeit.txt', 'von main\n')
+        subprocess.run(['git', 'rebase', 'main'], cwd=self.wt, capture_output=True)
+        self.assertTrue(repo.rebase_laeuft(self.wt))
+        self.drehbuch(claude=[{'tue': 'schlafen', 's': 30}])
+        ablauf.nacharbeit(self.p, 'A1', 'Weiter', automatisch=False)
+        self.assertFalse(repo.rebase_laeuft(self.wt))
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), alt)
+        self.assertEqual(git(self.wt, 'symbolic-ref', '--short', 'HEAD'), 'claude-a1')
+
+
+def ok_vorfahr(cwd, alt, neu):
+    return subprocess.run(['git', 'merge-base', '--is-ancestor', alt, neu], cwd=cwd).returncode == 0
 
 
 class ZeitlimitTest(Fall):

@@ -1,0 +1,31 @@
+# Bereichsdatei: als discovery/katalog/<bereich>.toml ablegen (Dateiname = Bereichs-ID in Kleinbuchstaben).
+# Prüfen mit: python -m devflow2 discovery pruefen
+
+[bereich]
+id = "BER"                  # kurze Großbuchstaben-ID; jede Prozess-ID beginnt damit
+name = "Beispielbereich"
+
+[[gruppe]]
+id = "GRP"                  # nur in dieser Datei eindeutig
+name = "Beispielgruppe"
+
+# Je Prozess ein Block. ID fest vergeben: <Bereich>-<Gruppe>-<Nr>, nie wiederverwenden.
+#
+# [[prozess]]
+# id = "BER-GRP-01"
+# name = "Kurzer Name des Prozesses"
+# gruppe = "GRP"
+# stand = "erfasst"         # erfasst, Ist aufgenommen, Ist vertieft, Soll entworfen, Soll abgestimmt,
+#                           # im Prototyp, freigegeben, in Umsetzung, umgesetzt
+# soll = "offen"            # offen, neu, bleibt, ändert sich, entfällt, zusammengelegt mit <id>, außerhalb
+# prioritaet = "mittel"     # hoch, mittel, niedrig (optional)
+# haeufigkeit = "täglich"   # frei (optional)
+# faktoren = []             # IDs aus discovery/faktoren.toml
+# quellen = []              # z. B. Interviewnummern wie "I-01"; Rollen statt Namen
+# ist_kurz = "Ein Satz: wie es heute läuft."    # optional; Einzeiler statt Beschreibungsdatei
+# soll_kurz = "Ein Satz: wie es sein soll oder warum es bleibt/entfällt."   # optional
+# beschreibung = "prozesse/BER-GRP-01.md"   # Pfad relativ zu discovery/
+#
+# Beschreibung oder Einzeiler: Ab "Ist vertieft" erwartet die Prüfung eine Beschreibungsdatei. Bis "Soll abgestimmt"
+# genügen stattdessen ist_kurz und soll_kurz (je ein Satz); steht soll auf bleibt, entfällt, außerhalb oder
+# zusammengelegt, reicht soll_kurz als Begründung. Ab "im Prototyp" ist die Beschreibungsdatei Pflicht (Warnung, kein Fehler).

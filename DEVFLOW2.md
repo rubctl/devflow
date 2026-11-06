@@ -66,10 +66,11 @@ Regeln, die devflow selbst prüft:
 
 - **Plan übernehmen:** nur, wenn der Plan committet ist und die Zeile `**Stand:** abgenommen vom Inhaber am …` trägt.
 - **Pflegeaufgaben:** `P.<datum>.<n>` entstehen nur über `pflege_aufgabe` unter einem gültigen Pflegeplan; vor dem Merge prüft devflow den Diff gegen den Umfang ([Routine-Updates](docs/pflege.md#routine-updates)).
-- **Mergen:** nur nach einem bestandenen Review auf genau dem aktuellen Branchstand. Der Merge läuft in wiederholbaren Schritten; jeder gilt erst mit Nachweis im Git-Stand als erledigt:
-  1. **Vorprüfung:** Ist der Statuscommit auf `main` überhaupt möglich (keine fremde Änderung an `ROADMAP.md`)?
-  2. **Rebase auf `main`:** devflow merkt sich den eigenen Rebase-Stand; ein Fortsetzen erkennt ihn wieder. Fremde Commits danach verlangen ein neues Review.
-  3. **Tests:** Hat `main` seit dem Review Code geändert, laufen die Tests, und zwar erneut, wenn sie unterbrochen wurden.
+- **Vor jedem Review:** Rebase auf einen festgehaltenen Basiscommit, wenn `main` fachlich weiter ist, dann Tests (Lauf `vorbereiten`). Ein Konflikt wird sofort abgebrochen, die Konfliktpfade gehen an die Nacharbeit ([Merge-Tor](docs/architektur.md#merge-tor-s142)).
+- **Mergen:** nur nach einem bestandenen Review auf genau dem vorbereiteten und getesteten Integrationsstand. Der Merge läuft in wiederholbaren Schritten; jeder gilt erst mit Nachweis im Git-Stand als erledigt:
+  1. **Vorprüfung:** Alle Tore neu, auch beim Fortsetzen (offene Fragen, Vorschlagsfreigabe, Masterplan, Pflegeumfang). Ist der Statuscommit auf `main` überhaupt möglich (keine fremde Änderung an `ROADMAP.md`)?
+  2. **Neues Review bei fachlich neuem `main`:** Hat `main` seit dem Review andere Commits als devflows Statuscommits bekommen, gibt es keinen Merge; die Kette geht zurück zu Vorbereitung, Tests und Review.
+  3. **Rebase über Statuscommits:** ohne neues Review; der neue Stand darf sich vom reviewten nur in `ROADMAP.md` unterscheiden.
   4. **Merge:** mit `--ff-only`; der SHA wird sofort gesichert.
   5. **Status:** `erledigt`, geprüft am committeten `ROADMAP.md`. Scheitert der Commit, nimmt devflow die eigene Änderung zurück.
   6. **Aufräumen:** Worktree und Branch ohne Force entfernen; was nicht geht, wird ein Hinweis.
@@ -96,7 +97,7 @@ Regeln, die devflow selbst prüft:
 
 ## Dashboard
 
-`python -m devflow2 web` startet die Oberfläche auf `127.0.0.1:8478` (Port `DEVFLOW2_WEB_PORT`). Sie zeigt die Lage über alle Projekte (oben, was beim Inhaber liegt), Kanban, Aufgaben, Läufe mit Live-Log und Urteil, Berichte, Diffs und md-Dateien. Zugang nur mit der Kopfzeile `Tailscale-User-Login` (Login `DEVFLOW2_WEB_LOGIN`, Standard `inhaber@github`), sonst 403, auch für `/health`. Im Betrieb läuft es als Benutzerdienst `devflow2-web` hinter `tailscale serve` auf `https://server.example.net:8472`; `deploy` in `devflow.toml` startet ihn neu und prüft `/health` (`ops/web_einrichten.sh`, `ops/web_deploy.sh`, Rückweg in [`docs/betrieb.md`](docs/betrieb.md#dashboard-dienst)). Handlungen (nur POST mit passender `Origin`): Frage beantworten (landet über `antwort_eintragen` als Commit in der Roadmap), Lauf anhalten und fortsetzen, alles anhalten und fortsetzen. Einzelheiten: [`docs/dashboard.md`](docs/dashboard.md).
+`python -m devflow2 web` startet die Oberfläche auf `127.0.0.1:8478` (Port `DEVFLOW2_WEB_PORT`). Sie zeigt die Lage über alle Projekte (oben, was beim Inhaber liegt), Kanban, Aufgaben, Läufe mit Live-Log und Urteil, Berichte, Diffs und md-Dateien. Zugang nur mit der Kopfzeile `Tailscale-User-Login` (Login `DEVFLOW2_WEB_LOGIN`, Standard `inhaber@github`), sonst 403, auch für `/health`. Im Betrieb läuft es als Benutzerdienst `devflow2-web` hinter `tailscale serve` auf `https://server.example.net:8472`; `deploy` in `devflow.toml` startet ihn neu und prüft `/health` (`ops/web_einrichten.sh`, `ops/web_deploy.sh`, Rückweg in [`docs/betrieb.md`](docs/betrieb.md#dashboard-dienst)). **Kurzfassung (S14.1):** Pläne (`## Kurz`), Berichte, Reviews und Läufe beginnen mit höchstens drei Zeilen; das Dashboard zeigt sie zuerst ([`docs/dashboard.md`](docs/dashboard.md#kurzfassung-s141)). **Braucht dich (S14.3)** ist eine Entscheidungsliste: je Eintrag eine Zeile mit Überschrift und Knopf (Übernehmen, Abnehmen, Empfehlung annehmen, Fortsetzen), Details per Klick; ein Klick wirkt sofort und ist an den angezeigten Stand gebunden. Handlungen (nur POST mit passender `Origin`): Frage beantworten (landet über `antwort_eintragen` als Commit in der Roadmap), Lauf anhalten und fortsetzen, alles anhalten und fortsetzen. Einzelheiten: [`docs/dashboard.md`](docs/dashboard.md).
 
 ## Dateien
 

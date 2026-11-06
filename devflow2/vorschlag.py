@@ -7,7 +7,8 @@ tragen die ID trotzdem als `aufgabe`, damit `ablauf.zweig` und die Reviews ihn n
 Zustände: `entsteht` (im Traum) → `offen` (wartet auf den Inhaber) → `uebernommen` → `gemergt`, sonst `verworfen` oder `gescheitert`.
 
 Sperre: `merge_tor` steht in `ablauf._merge_pruefen`, durch das jeder Merge muss (Werkzeug, Folgeschritt, Fortsetzen); `deploy_sperre` steht in
-`ablauf._deploy_gesperrt`. Beide sehen das Register, nicht den Auftrag oder einen Hinweis. Die Traumläufe melden keine Ereignisse.
+`ablauf._deploy_gesperrt`. Beide sehen das Register, nicht den Auftrag oder einen Hinweis. Die Herkunft eines Vorschlags umfasst auch devflows
+Rebases (`rebase_kopf`, `rebases` an Vorbereitungs- und Mergeläufen). Die Traumläufe melden keine Ereignisse.
 
 Schreibziele: Der Baulauf hat nur Read, Grep, Glob, Edit und Write, keine Shell, kein Git und kein MCP, und schreiben darf er nur im eigenen
 Worktree (`SCHREIBEND`, `MODUS`). Den Commit macht devflow, nachdem `_schreibziele` den Worktree und die Haupt-Checkouts geprüft hat.
@@ -164,9 +165,12 @@ def _pruefen(p, v, marke):
     k = dict(projekt=p.name, id=v['id'], aufgabe=v['titel'], auftrag=v['auftrag'], basis=p.cfg['basis'], test=p.cfg['test'], branch=v['branch'], cwd=str(rwt),
              commit=commit, basis_commit=git(p.repo, 'merge-base', p.cfg['basis'], commit),
              grundlage=grundlage.fuer(p, f'{v["titel"]} {v["auftrag"]}'))
+    # Prüfstand wie nach `ablauf.vorbereiten`: gebaut auf dem Startcommit, getestet ist der Baucommit, falls die Tests grün waren
+    getestet = commit if v.get('test') == 'gruen' and commit == v.get('bau') else None
     try:
         return laeufe.starten(p, 'review', rev, rwt, auftraege.review(k, 1, [], NAMEN[rev]), aufgabe=v['id'], branch=v['branch'], worktree=v['worktree'],
-                              review_worktree=str(rwt), commit=commit, runde=1, reviewer=rev, entwickler=ENTWICKLER, schema=auftraege.REVIEW_SCHEMA,
+                              review_worktree=str(rwt), commit=commit, basis_commit=v['start'], test_commit=getestet,
+                              runde=1, reviewer=rev, entwickler=ENTWICKLER, schema=auftraege.REVIEW_SCHEMA,
                               automatisch=False, vorschlag=v['id'], grundlage_stand=k['grundlage']['stand'], **marke)
     except Exception:
         ablauf._weg(rwt)
@@ -228,7 +232,22 @@ def abschluss(p, lauf):
 
 
 def _rebases(p, v):
-    return [l['rebase_kopf'] for l in laeufe.alle(p.name, v['id']) if l.get('rebase_kopf')]
+    """Alle Stände aus devflows Rebases des Vorschlags (Vorbereitung vor dem Review, Merge), auch abgebrochene Läufe zählen mit."""
+    return list(dict.fromkeys([l['rebase_kopf'] for l in laeufe.alle(p.name, v['id']) if l.get('rebase_kopf')]
+                              + [r['kopf'] for l in laeufe.alle(p.name, v['id']) for r in l.get('rebases') or []]))
+
+
+def _freigegeben(p, v):
+    """Stände, die nur durch devflow aus dem freigegebenen Commit hervorgehen: devflows Reviewbericht darauf (`kopf` eines Reviews genau
+    eines solchen Commits) und devflows Rebases, die von einem solchen Stand ausgingen (`rebases`)."""
+    erlaubt = {v['freigabe']['commit']}
+    for l in laeufe.alle(p.name, v['id']):  # ältester zuerst: Rebase vor dem Review, Review, Rebase beim Merge
+        for r in l.get('rebases') or []:
+            if r.get('ausgang') in erlaubt:
+                erlaubt.add(r['kopf'])
+        if l['art'] == 'review' and l.get('kopf') and l.get('commit') in erlaubt:
+            erlaubt.add(l['kopf'])
+    return erlaubt
 
 
 def _eigen(p, v, kopf):
@@ -290,9 +309,10 @@ def _zurueck(p, v, stand, gesperrt):
                          f'roadmap: {v["id"]} → Braucht dich', gesperrt=gesperrt)
 
 
-def merge_tor(p, branch, aufgabe_id, reviews, eigener_rebase=None, gesperrt=False):
+def merge_tor(p, branch, aufgabe_id, gesperrt=False):
     """Vor jedem Merge. Erlaubt ist nur ein Vorschlag mit Freigabe, und nur der Stand, dem der Inhaber zugestimmt hat: genau dieser Commit, dazu devflows
-    eigener Reviewbericht darauf und devflows eigener Rebase. Normale Branches dürfen keinen ungefreigegebenen Vorschlag mitbringen."""
+    eigener Reviewbericht und devflows Rebases davon (`_freigegeben`), oder ein solcher Stand mit anderem ROADMAP.md (Rebase über Statuscommits).
+    Normale Branches dürfen keinen ungefreigegebenen Vorschlag mitbringen."""
     v = zu(p, branch, aufgabe_id)
     if v is None:
         if branch.startswith(PRAEFIX) or ist_vorschlag(aufgabe_id):
@@ -306,9 +326,9 @@ def merge_tor(p, branch, aufgabe_id, reviews, eigener_rebase=None, gesperrt=Fals
     freigabe = v.get('freigabe')
     if not freigabe:
         raise Fehler(nicht_uebernommen(v['id']))
-    erlaubt = {freigabe['commit'], eigener_rebase} | {r.get('kopf') for r in reviews if r.get('commit') == freigabe['commit']}
+    erlaubt = _freigegeben(p, v)
     stand = repo.kopf(p, branch)
-    if stand not in erlaubt:
+    if stand not in erlaubt and not any(repo.nur_status_dazu(p, x, stand) for x in erlaubt):
         _zurueck(p, v, stand, gesperrt)
         raise ablauf.FrageOffen(f'{v["id"]}: Branch hat sich nach „Übernehmen“ geändert; kein Merge, bis {_i.nom()} neu zustimmt')
 
@@ -378,9 +398,9 @@ def uebernehmen(vid, gesehen, herkunft):
     _sichern(v)
     r = review_stand(p, v, stand)
     if r and r['urteil'] == 'bestanden':
-        ablauf.mergen(p, vid, automatisch=True)
-        return 'merge'
-    ablauf.review_anfordern(p, vid, automatisch=True)
+        l = ablauf.mergen(p, vid, automatisch=True)  # ist main seit dem Review fachlich weiter, startet stattdessen die Vorbereitung
+        return 'merge' if l['art'] == 'mergen' else 'review'
+    ablauf.review_anfordern(p, vid, automatisch=True)  # erst Vorbereitung (Rebase, Tests), dann das Review
     return 'review'
 
 
@@ -401,8 +421,9 @@ def _festhalten(p, v):
         _sichern(v)
 
 
-def verwerfen(vid, herkunft):
-    """Knopf „Verwerfen“. Rückgabe: False, wenn er schon verworfen war (Doppelklick). Es läuft dafür nichts, und gemergt ist er noch nicht."""
+def verwerfen(vid, herkunft, gesehen=None):
+    """Knopf „Verwerfen“. Rückgabe: False, wenn er schon verworfen war (Doppelklick). Es läuft dafür nichts, und gemergt ist er noch nicht.
+    `gesehen`: der angezeigte Branch-Stand ('' = Branch gab es nicht); steht der Branch inzwischen woanders, wird nichts entfernt. None prüft nicht."""
     if herkunft != 'dashboard':
         raise Fehler(f'Verwerfen kann nur {_i.nom()} im Dashboard')
     v = laden(vid)
@@ -417,6 +438,8 @@ def verwerfen(vid, herkunft):
             raise Fehler(f'Für {vid} läuft gerade etwas; erst anhalten')
         if any(l['art'] == 'mergen' and l.get('merge') for l in ls):
             raise Fehler(f'{vid} ist schon gemergt')
+        if gesehen is not None and (kopf(p, v) or '') != gesehen:
+            raise Fehler(f'Branch {v["branch"]} steht nicht mehr auf dem angezeigten Stand; bitte neu ansehen')
         v.update(zustand='verworfen', freigabe=None, hinweis=' '.join(_entfernen(p, v)) or None, entscheidung=dict(was='verworfen', zeit=laeufe.jetzt(), herkunft=herkunft))
         _sichern(v)
         _festhalten(p, v)

@@ -3,6 +3,7 @@ import html
 import logging
 import os
 import re
+import shutil
 import time
 import unittest
 import warnings
@@ -48,6 +49,7 @@ class RoadmapAnsichtTest(Fall):
     def setUp(self):
         super().setUp()
         (self.repo / 'ROADMAP.md').write_text(TEXT)
+        laeufe.speichern({'id': 'lose', 'projekt': 'demo', 'art': 'entwickeln', 'modell': 'claude', 'aufgabe': '0.2', 'zustand': 'fertig', 'angelegt': 1, 'start': 1, 'ende': 2})
         self.client = TestClient(web.anwendung(), headers={'Tailscale-User-Login': 'inhaber@github'})
 
     def test_zuordnung_und_fortschritt(self):
@@ -140,6 +142,7 @@ class RoadmapTabelleTest(Fall):
         super().setUp()
         (self.repo / 'ROADMAP.md').write_text(TEXT)
         (self.repo / 'plan' / 'eins.md').write_text(PLAN_EINS)
+        self.lauf('lose', '0.2', start=10, dauer=5)
         self.lauf('e1-ent', 'E1', start=1000, dauer=600, kosten=0.5, cli_modell='sonnet', cli_effort='high', stufe='normal')
         self.lauf('e1-rev', 'E1', art='review', modell='sol', start=2000, dauer=300, cli_effort='high')
         self.lauf('e1-na1', 'E1', art='nacharbeit', start=3000, dauer=60, kosten=0.25, cli_modell='sonnet', cli_effort='high', zaehlt=True)
@@ -168,6 +171,21 @@ class RoadmapTabelleTest(Fall):
         self.assertIn('2 von 2 erledigt', h[h.index('Vorhaben Zwei'):])
         self.assertRegex(h, r'<details id="demo-v2" class="rc-card vorhaben" data-fertig="1">')  # geschlossen: kein open
 
+    def test_vorhaben_neueste_zuerst(self):
+        neu = TEXT.replace('## Protokoll', f'### Vorhaben Drei · Claude · 31.10.2026 ([Plan](plan/drei.md))\n\n{KOPF}| D1 | Neu | Claude | offen | 31.10. | |\n\n## Protokoll')
+        (self.repo / 'ROADMAP.md').write_text(neu)
+        git(self.repo, 'commit', '-q', '-am', 'drei')
+        titel = re.findall(r'<span class="v-titel">([^<]*)', self.client.get('/p/demo/roadmap').text)
+        self.assertEqual(titel, ['Vorhaben Drei · Claude · 31.10.2026', 'Vorhaben Eins · Claude · 29.10.2026', 'Sonstiges', 'Vorhaben Zwei · Claude · 30.10.2026'])
+        g = [{'titel': t, 'plan': 'p', 'gesamt': 1, 'erledigt': 0} for t in ('A', 'B · 01.01.2026', 'C')]
+        self.assertEqual([x['titel'] for x in web_roadmap.neueste_zuerst(g)], ['B · 01.01.2026', 'C', 'A'])  # ohne Datum: später in der Datei zuerst
+
+    def test_sonstiges_entfaellt_ohne_laeufe_auch_bei_offener_aufgabe(self):
+        shutil.rmtree(laeufe.verzeichnis('lose'))  # kein Lauf zu Sonstiges: Karte entfällt, obwohl 0.2 offen ist
+        titel = re.findall(r'<span class="v-titel">([^<]*)', self.client.get('/p/demo/roadmap').text)
+        self.assertNotIn('Sonstiges', titel)
+        self.assertEqual(len(titel), 2)
+
     def test_laufender_lauf_in_seiner_zeile(self):
         laeufe.speichern({'id': 'lauf', 'projekt': 'demo', 'art': 'nacharbeit', 'modell': 'claude', 'aufgabe': 'E2', 'zustand': 'laeuft', 'angelegt': laeufe.jetzt(), 'start': 100, 'pid': os.getpid()})
         laeufe.speichern({'id': 'warte', 'projekt': 'demo', 'art': 'review', 'modell': 'sol', 'aufgabe': 'E3', 'zustand': 'kontingent', 'angelegt': laeufe.jetzt()})
@@ -195,10 +213,9 @@ class RoadmapTabelleTest(Fall):
         self.assertIn('1 von 3 erledigt', h)
         self.assertIn('4 Läufe · Nacharbeit 1 · 0,75 $ Claude · Dauer 16 min', h)
         self.assertIn('2 Läufe · Nacharbeit 0 · 1,50 $ Claude · Dauer 1 h 03 min', h)
-        self.assertIn('– Läufe · Nacharbeit – · Kosten – · Dauer –', h)  # Sonstiges ohne Läufe
+        self.assertIn('1 Lauf · Nacharbeit 0 · Kosten – · Dauer 5 s', h)  # Sonstiges mit dem Lauf zu 0.2
 
     def test_kopf_einzahl(self):
-        self.lauf('sonst', '0.1', start=10, dauer=5)
         self.assertIn('1 Lauf · Nacharbeit 0 · Kosten – · Dauer 5 s', self.client.get('/p/demo/roadmap').text)
 
     def test_filter_nach_status(self):
@@ -273,7 +290,7 @@ class RoadmapTabelleTest(Fall):
         self.assertIn('Vorhaben Drei', h)
         self.assertNotIn('Vorhaben Eins', h)  # nur dieses Projekt, nichts Projektübergreifendes
         self.assertIn('href="/p/zweit/a/X1"', h)
-        self.assertEqual(sorted(zeilen(h)), ['0.1', 'X1', 'Y1', 'Y2'])
+        self.assertEqual(sorted(zeilen(h)), ['X1', 'Y1', 'Y2'])
         self.assertEqual(self.client.get('/roadmap').status_code, 200)  # Umleitung wird gefolgt; mehrere Projekte → Übersicht
         (zweit / 'ROADMAP.md').write_text(KOPF + '| A | b |\n')
         self.assertIn('Spalten', self.client.get('/p/zweit/roadmap').text)

@@ -1,7 +1,9 @@
 """Abläufe hinter den MCP-Werkzeugen: Stand, Plan übernehmen, Entwickeln, Test, Review, Nacharbeit, Merge, Deploy.
 
 Mit `automatisch=True` startet jeder fertige Lauf den nächsten Schritt selbst:
-entwickeln → testen → Review → (Nacharbeit → testen → Review, höchstens zwei Runden) → mergen → deployen.
+entwickeln → vorbereiten → Review → (Nacharbeit → vorbereiten → Review, höchstens zwei Runden) → mergen → deployen.
+`vorbereiten` ist der gemeinsame Schritt vor jedem Review: Rebase auf einen festgehaltenen Basiscommit, Tests. Gemergt wird nur, was in genau
+diesem Integrationsstand getestet und reviewt ist; ist `main` seit dem Review fachlich weiter, geht die Kette zurück zu `vorbereiten` (S14.2).
 Was der Inhaber entscheiden muss, landet als offene Frage in der Roadmap und setzt die Aufgabe auf „Braucht dich“. Solange sie
 offen ist, startet für diese Aufgabe nichts mehr; die Kette wartet. Antworten, Ideen und Halte tragen ihre Herkunft
 (`roadmap.HERKUNFT`). Sie kommt vom Zugang, also vom aufrufenden Code; der Standard ist `steuerung`, das Recht ohne Vorrang.
@@ -42,13 +44,17 @@ class FrageOffen(Fehler):
     """Die Aufgabe wartet auf eine Antwort. Im Abschluss eines Laufs ist das kein Fehler: Die Kette endet hier."""
 
 
+class NeuPruefen(Fehler):
+    """Der reviewte Stand ist nicht der Integrationsstand, der gemergt würde: zurück zu Vorbereitung, Tests und Review."""
+
+
 def datum():
     return datetime.date.today().strftime('%d.%m.%Y')
 
 
 def kurz(lauf):
     felder = ('id', 'aufgabe', 'art', 'modell', 'zustand', 'runde', 'urteil', 'rc', 'fehler', 'frei_ab', 'branch', 'merge',
-              'hinweise', 'halt_herkunft')
+              'hinweise', 'halt_herkunft', 'kurz', 'basis_commit', 'test_commit', 'commit', 'konflikt', 'neu_pruefen')
     return {k: lauf[k] for k in felder if lauf.get(k) is not None}
 
 
@@ -322,10 +328,35 @@ def _reviews(p, aufgabe_id):
     return [l for l in laeufe.alle(p.name, aufgabe_id) if l['art'] == 'review' and l.get('urteil')]
 
 
-def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_geaendert=None):
+def _pruefstand(p, aufgabe_id, kopf):
+    """Die Vorbereitung, auf der ein Review von `kopf` aufsetzen darf: die jüngste der Aufgabe, ganz fertig, ohne Konflikt, Tests grün, genau
+    dieser Kopf, und `main` ist seit ihrem Basiscommit höchstens um Statuscommits weiter. Eine abgebrochene oder noch laufende jüngere
+    Vorbereitung macht jede ältere ungültig: Kein alter Prüfstand gilt für einen neuen Stand."""
+    l = next((x for x in reversed(laeufe.alle(p.name, aufgabe_id)) if x['art'] == 'vorbereiten'), None)
+    if (l and l.get('arbeit_fertig') and l.get('kopf') == kopf and l.get('konflikt') is None and not l.get('test_rc')
+            and not repo.fachliche_commits(p, l['basis'], p.cfg['basis'])):
+        return l
+    return None
+
+
+def vorbereiten(p, aufgabe_id, automatisch=True, reviewer=None, vorgaben_geaendert=None):
+    """Gemeinsamer Schritt vor jedem Review (interner Lauf `vorbereiten`): Rebase auf einen festgehaltenen Basiscommit, falls `main` fachlich
+    weiter ist, dann Tests; danach startet das Review. Konflikt oder rote Tests führen bei `automatisch` zur Nacharbeit."""
+    _bereit_zum_start(p, aufgabe_id)
+    z = zweig(p, aufgabe_id)
+    _stand(p, aufgabe_id, stand=f'Vorbereitung vor dem Review: Rebase auf {p.cfg["basis"]}, Tests')
+    l = laeufe.starten(p, 'vorbereiten', 'intern', z['worktree'], aufgabe=aufgabe_id, branch=z['branch'], worktree=z['worktree'],
+                       entwickler=z['entwickler'], automatisch=automatisch, reviewer=reviewer, vorgaben_geaendert=vorgaben_geaendert)
+    return kurz(l)
+
+
+def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_geaendert=None, vorbereitung=None):
+    """Review genau des vorbereiteten Stands. Fehlt die passende Vorbereitung (`_pruefstand`), startet erst sie; das Review folgt dann
+    von selbst. `vorbereitung`: die Vorbereitung, aus deren Abschluss der Aufruf kommt."""
     _bereit_zum_start(p, aufgabe_id)
     k, z = kontext(p, aufgabe_id), zweig(p, aufgabe_id)
     wt = z['worktree']
+    repo.rebase_abbrechen(wt)  # kein Review eines halben Rebase
     if git(wt, 'status', '--porcelain'):
         raise Fehler(f'Worktree {wt} ist nicht sauber; erst committen lassen (nacharbeit)')
     commit = git(wt, 'rev-parse', 'HEAD')
@@ -337,6 +368,11 @@ def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_ge
         raise Fehler(f'Reviewer {rev!r} unbekannt')
     if rev == z['entwickler']:
         raise Fehler(f'{NAMEN[rev]} hat {aufgabe_id} entwickelt; das Review macht das jeweils andere Modell')
+    stand = _pruefstand(p, aufgabe_id, commit)
+    if not stand:
+        if vorbereitung and vorbereitung.get('kopf') != commit:
+            raise Fehler(f'Branch {z["branch"]} hat sich nach der Vorbereitung geändert; neues review_anfordern()')
+        return vorbereiten(p, aufgabe_id, automatisch, reviewer, vorgaben_geaendert)
     alt = _reviews(p, aufgabe_id)
     runde = len(alt) + 1
     rwt = p.worktree(f'review-{projekte.slug(aufgabe_id)}-{runde}')
@@ -352,6 +388,7 @@ def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_ge
         _stand(p, aufgabe_id, 'Review', f'Review {NAMEN[rev]} Runde {runde} läuft')
         l = laeufe.starten(p, 'review', rev, rwt, auftraege.review(k, runde, vorher, NAMEN[rev]), aufgabe=aufgabe_id,
                            branch=z['branch'], worktree=wt, review_worktree=str(rwt), commit=commit, runde=runde,
+                           basis_commit=stand['basis'], test_commit=stand.get('getestet'), vorbereitung=stand['id'],
                            reviewer=rev, entwickler=z['entwickler'], schema=auftraege.REVIEW_SCHEMA,
                            automatisch=automatisch, **_stand_von(k))
     except Exception:
@@ -363,6 +400,7 @@ def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_ge
 def _nacharbeit_starten(p, aufgabe_id, grund, details, automatisch, zaehlt=True, **extra):
     _bereit_zum_start(p, aufgabe_id)
     k, z = kontext(p, aufgabe_id), zweig(p, aufgabe_id)
+    repo.rebase_abbrechen(z['worktree'])  # kein Modelllauf in einem halben Rebase
     k.update(branch=z['branch'], worktree=z['worktree'])
     _mit_grundlage(p, k, z['zusatzauftrag'])
     # Zählende Runden (Review, rote Tests, Hinweise) starten frisch: die alte Sitzung trägt den ganzen Verlauf
@@ -385,19 +423,34 @@ def nacharbeit(p, aufgabe_id, hinweise='', automatisch=True):
     return _nacharbeit_starten(p, aufgabe_id, 'Hinweise der steuernden KI:', hinweise, automatisch, hinweise=hinweise)
 
 
-def _merge_pruefen(p, branch, entwickler, aufgabe_id, eigener_rebase=None, gesperrt=False):
-    """Bestandenes Gegenreview auf genau dem Branchstand; erlaubt ist nur zusätzlich devflows eigener Rebase. Durch diese Prüfung muss
-    jeder Merge, auch ein fortgesetzter: Deshalb steht hier die Sperre für Traumvorschläge."""
+def _merge_pruefen(p, branch, entwickler, aufgabe_id, gesperrt=False):
+    """Bestandenes Gegenreview auf genau dem Integrationsstand, der gemergt würde. Durch diese Prüfung muss jeder Merge, auch ein
+    fortgesetzter: Deshalb steht hier die Sperre für Traumvorschläge.
+
+    Der Branch steht auf dem Kopf des Reviews (reviewter Commit plus devflows Reviewbericht) oder unterscheidet sich davon nur in ROADMAP.md
+    (devflows Rebase über Statuscommits). Seit dem Basiscommit des Reviews darf `main` nur Statuscommits von devflow bekommen haben
+    (`repo.statuscommit`: Autor und Pfade); sonst, und bei einem Review ohne Vorbereitung oder ungetestetem Stand, `NeuPruefen`."""
     r = _reviews(p, aufgabe_id)
-    _vorschlag().merge_tor(p, branch, aufgabe_id, r, eigener_rebase, gesperrt)
+    _vorschlag().merge_tor(p, branch, aufgabe_id, gesperrt)
     if not r or r[-1]['urteil'] != 'bestanden':
         raise Fehler(f'Für Aufgabe {aufgabe_id} liegt kein bestandenes Review vor')
-    if r[-1]['reviewer'] == entwickler:
+    r, name = r[-1], p.cfg['basis']
+    if r['reviewer'] == entwickler:
         raise Fehler(f'Das letzte Review von {aufgabe_id} ist ein Selbstreview; nötig ist das andere Modell')
-    if git(p.repo, 'rev-parse', f'refs/heads/{branch}') not in (r[-1].get('kopf'), eigener_rebase):
+    kopf = git(p.repo, 'rev-parse', f'refs/heads/{branch}')
+    if kopf != r.get('kopf') and not (r.get('kopf') and repo.nur_status_dazu(p, r['kopf'], kopf)):
         raise Fehler(f'Branch {branch} hat sich nach dem bestandenen Review geändert; neues Review nötig')
-    _vorgaben_tor(p, r[-1])
-    return r[-1]
+    if set(repo.STATUSPFADE) & set(git(p.repo, 'diff', '--name-only', f'{name}...{kopf}').split('\n')):
+        raise Fehler(f'Branch {branch} ändert ROADMAP.md; den Status pflegt nur devflow')
+    _vorgaben_tor(p, r)
+    if not r.get('basis_commit'):
+        raise NeuPruefen('Das Review lief ohne Vorbereitung (Rebase, Tests)')
+    if r.get('test_commit') != r['commit'] and _testbefehl(p, aufgabe_id):
+        raise NeuPruefen('Der reviewte Stand ist nicht getestet')
+    fach = repo.fachliche_commits(p, r['basis_commit'], name)
+    if fach:
+        raise NeuPruefen(f'{name} hat sich seit dem Review fachlich geändert ({len(fach)} Commits, zuletzt `{fach[-1][:7]}`)')
+    return r
 
 
 def _vorgaben_tor(p, review):
@@ -442,6 +495,13 @@ def mergen(p, aufgabe_id, automatisch=True):
             raise Fehler(f'Vorgaben haben sich seit dem Review geändert ({e}); vor dem Merge prüfen: review_anfordern("{aufgabe_id}")') from None
         protokoll(p, f'devflow · {aufgabe_id}: Vorgaben seit dem Review geändert ({e}); Prüfung vor dem Merge')
         return review_anfordern(p, aufgabe_id, automatisch=True, vorgaben_geaendert=e.sachen)
+    except NeuPruefen as e:
+        _masterplan_tor(p, aufgabe_id, z['branch'])  # ein Tor, das ohnehin sperrt, kostet kein neues Review
+        _pflege_tor(p, aufgabe_id, z['branch'])
+        if not automatisch:
+            raise Fehler(f'{e}; vor dem Merge neu prüfen: review_anfordern("{aufgabe_id}")') from None
+        protokoll(p, f'devflow · {aufgabe_id}: {e}; zurück zu Vorbereitung, Tests und Review')
+        return review_anfordern(p, aufgabe_id, automatisch=True)
     _masterplan_tor(p, aufgabe_id, z['branch'])
     _pflege_tor(p, aufgabe_id, z['branch'])
     l = laeufe.starten(p, 'mergen', 'intern', p.repo, aufgabe=aufgabe_id, branch=z['branch'], worktree=z['worktree'],
@@ -526,6 +586,8 @@ def fortsetzen(ziel, herkunft='steuerung'):
     elif l.get('aufgabe'):
         _gesperrt(offene_fragen(p, l['aufgabe']))
     cwd = Path(l['cwd'])
+    if l['art'] in ('entwickeln', 'nacharbeit') and cwd.exists() and not l.get('arbeit_fertig') and repo.rebase_abbrechen(cwd):
+        protokoll(p, f'devflow · {l["aufgabe"]}: halben Rebase in {cwd.name} vor dem Fortsetzen abgebrochen')  # kein Modelllauf darin
     if not cwd.exists() and not l.get('arbeit_fertig'):
         if l['art'] not in ('review', 'meinung'):
             raise Fehler(f'Arbeitsverzeichnis {cwd} fehlt; Lauf {ziel} kann nicht fortgesetzt werden')
@@ -583,7 +645,7 @@ def abschluss(lauf):
         if lauf.get('vorschlag'):
             _vorschlag().abschluss(p, lauf)
             return
-        {'entwickeln': _nach_entwicklung, 'nacharbeit': _nach_entwicklung, 'test': _nach_test, 'review': _nach_review,
+        {'entwickeln': _nach_entwicklung, 'nacharbeit': _nach_entwicklung, 'test': _nach_test, 'vorbereiten': _nach_vorbereitung, 'review': _nach_review,
          'meinung': _nach_meinung, 'mergen': _nach_merge, 'deploy': _nach_deploy, 'steuern': _nach_steuern,
          'pflege': lambda p, lauf: None, 'messung': lambda p, lauf: None, 'traum': lambda p, lauf: None}[lauf['art']](p, lauf)
     except FrageOffen as e:
@@ -608,6 +670,14 @@ def _nach_entwicklung(p, lauf):
     if marker:
         frage_stellen(p, ergebnis.split(marker, 1)[1].strip(), [], '(siehe Frage)', aid)
         return
+    if repo.rebase_abbrechen(wt):
+        if not lauf.get('nachgehakt'):
+            _nacharbeit_starten(p, aid, 'Dein Rebase war nicht abgeschlossen; devflow hat ihn abgebrochen, der Branch steht wieder auf dem Stand davor.',
+                                f'Rebase erneut auf {p.cfg["basis"]}, schließe ihn mit `git rebase --continue` ab und committe; lass keinen halben Rebase zurück.',
+                                lauf.get('automatisch'), zaehlt=False, nachgehakt=True)
+        else:
+            _stand(p, aid, 'blockiert', f'Halber Rebase nach Lauf {lauf["id"]}')
+        return
     offen = git(wt, 'status', '--porcelain')
     if offen:
         if not lauf.get('nachgehakt'):
@@ -630,10 +700,7 @@ def _nach_entwicklung(p, lauf):
         return
     _stand(p, aid, stand=f'Branch `{lauf["branch"]}`, Entwicklung fertig ({vorne} Commits)')
     if lauf.get('automatisch'):
-        if _testbefehl(p, aid):
-            testen(p, aid, automatisch=True)
-        else:
-            review_anfordern(p, aid, automatisch=True)
+        review_anfordern(p, aid, automatisch=True)  # erst die Vorbereitung (Rebase, Tests), dann das Review
 
 
 def _nach_test(p, lauf):
@@ -646,6 +713,29 @@ def _nach_test(p, lauf):
     else:
         _runde_oder_frage(p, lauf['aufgabe'], 'Die Projekttests schlagen fehl.',
                           f'Befehl: `{_testbefehl(p, lauf["aufgabe"])}`\nLetzte Ausgabe:\n{(lauf.get("ergebnis") or "")[-3000:]}')
+
+
+def _nach_vorbereitung(p, lauf):
+    """Konflikt oder rote Tests → Nacharbeit (bei `automatisch`), sonst das Review genau dieses Stands, auch ohne `automatisch`: Darum ging es."""
+    aid, name = lauf['aufgabe'], p.cfg['basis']
+    if lauf.get('konflikt') is not None:
+        pfade = lauf['konflikt']
+        _stand(p, aid, stand=f'Rebase auf {name} `{lauf["ziel"][:7]}` mit Konflikten: {", ".join(pfade)}'[:200])
+        if lauf.get('automatisch'):
+            _runde_oder_frage(p, aid, f'Der Rebase deines Branches auf {name} (`{lauf["ziel"][:7]}`) hat Konflikte. devflow hat ihn abgebrochen; '
+                              f'der Branch steht unverändert auf `{lauf["ausgang"][:7]}`.',
+                              'Konfliktpfade:\n' + '\n'.join(f'- {x}' for x in pfade)
+                              + f'\n\nRebase selbst auf {name} (`git rebase {name}`), löse die Konflikte, schließe mit `git rebase --continue` ab '
+                              'und lass keinen halben Rebase zurück. ROADMAP.md bleibt unverändert.')
+        return
+    if lauf.get('test_rc'):
+        _stand(p, aid, stand=f'Tests rot nach der Vorbereitung (Lauf {lauf["id"]})')
+        if lauf.get('automatisch'):
+            _runde_oder_frage(p, aid, 'Die Projekttests schlagen fehl.',
+                              f'Befehl: `{_testbefehl(p, aid)}`\nLetzte Ausgabe:\n{(lauf.get("ergebnis") or "")[-3000:]}')
+        return
+    review_anfordern(p, aid, reviewer=lauf.get('reviewer'), automatisch=lauf.get('automatisch'),
+                     vorgaben_geaendert=lauf.get('vorgaben_geaendert'), vorbereitung=lauf)
 
 
 def urteil(text):
@@ -663,7 +753,9 @@ def urteil(text):
                 and isinstance(d.get('bericht'), str) and all(isinstance(b, dict) for b in d['befunde'])):
             befunde = [{f: str(b.get(f, '')) for f in ('nr', 'schwere', 'ort', 'was')} for b in d['befunde']]
             schwer = any(b['schwere'].upper().startswith(('P1', 'P2')) for b in befunde)
-            return dict(urteil='nacharbeit' if schwer else d['urteil'], befunde=befunde, bericht=d['bericht'])
+            k = d.get('kurz')
+            return dict(urteil='nacharbeit' if schwer else d['urteil'], befunde=befunde, bericht=d['bericht'],
+                        kurz='\n'.join(' '.join(z.split()) for z in k.splitlines() if z.strip()) if isinstance(k, str) else '')
     raise Fehler('Review ohne gültiges Urteil (JSON mit urteil, befunde, bericht erwartet)')
 
 
@@ -679,7 +771,7 @@ def review_sichern(lauf):
         schreiben(Path(wt) / datei, u['bericht'].rstrip() + '\n')
         git(wt, 'add', '--', datei)
         git(wt, 'commit', '-q', '-m', f'docs: {aid} Review {NAMEN[rev]} Runde {lauf["runde"]}: {u["urteil"]}')
-        lauf.update(urteil=u['urteil'], befunde=u['befunde'], kopf=git(wt, 'rev-parse', 'HEAD'), bericht_datei=datei)
+        lauf.update(urteil=u['urteil'], befunde=u['befunde'], kurz=u['kurz'], kopf=git(wt, 'rev-parse', 'HEAD'), bericht_datei=datei)
         laeufe.speichern(lauf)
     _weg(lauf['review_worktree'])
     return u, datei
@@ -706,19 +798,62 @@ def _schritt(log, text):
     log.flush()
 
 
-def intern(lauf, log):
-    """Merge in wiederholbaren Schritten; jeder Schritt gilt erst mit Nachweis im Git-Stand als erledigt.
+def _vorbereiten_intern(p, lauf, log, merken):
+    """Rebase und Tests vor dem Review; jeder Schritt steht sofort am Lauf. Eine Wiederholung (fortsetzen) beginnt von vorn: Rest eines
+    Rebase abbrechen, Basis neu festhalten, Tests neu. `ausgang`/`ziel`/`konflikt` beschreiben einen abgebrochenen Rebase, `rebases` alle
+    gelungenen (Herkunft für die Vorschlagssperre), `kopf` den vorbereiteten und `getestet` den getesteten Commit."""
+    aid, wt, name = lauf['aufgabe'], lauf['worktree'], p.cfg['basis']
+    if repo.rebase_abbrechen(wt):
+        _schritt(log, 'Rest eines unterbrochenen Rebase abgebrochen')
+    if git(wt, 'status', '--porcelain'):
+        raise Fehler(f'Worktree {wt} ist nicht sauber; erst committen lassen (nacharbeit)')
+    if git(wt, 'symbolic-ref', '-q', 'HEAD', check=False) != f'refs/heads/{lauf["branch"]}':
+        raise Fehler(f'Worktree {wt} steht nicht auf {lauf["branch"]}')
+    ausgang, basis = git(wt, 'rev-parse', 'HEAD'), git(p.repo, 'rev-parse', name)
+    merken(basis=basis, ausgang=ausgang, ziel=None, konflikt=None, kopf=None, getestet=None, test_rc=None, ergebnis=None)
+    fach = repo.fachliche_commits(p, ausgang, basis)
+    if fach:
+        _schritt(log, f'{name} ist fachlich weiter ({len(fach)} Commits); Rebase auf {basis[:7]}')
+        konflikt = repo.rebase(wt, basis)
+        if konflikt is not None:
+            merken(ziel=basis, konflikt=konflikt)
+            _schritt(log, f'Rebase mit Konflikten abgebrochen: {", ".join(konflikt)}')
+            return
+        neu = git(wt, 'rev-parse', 'HEAD')
+        merken(ziel=basis, rebase_kopf=neu, rebases=(lauf.get('rebases') or []) + [dict(ausgang=ausgang, ziel=basis, kopf=neu)])
+    else:
+        _schritt(log, f'{name} ist höchstens um Statuscommits weiter; kein Rebase')
+    kopf = git(wt, 'rev-parse', 'HEAD')
+    merken(kopf=kopf)
+    befehl = _testbefehl(p, aid)
+    if not befehl:
+        return
+    _schritt(log, f'Tests auf {kopf[:7]}')
+    datei = laeufe.verzeichnis(lauf['id']) / 'tests.log'
+    with open(datei, 'wb') as aus:
+        rc = laeufe.befehl_ausfuehren(lauf, laeufe.befehl({**lauf, 'modell': 'shell', 'testlauf': True}, befehl), aus, aus, cwd=wt)
+    if git(wt, 'rev-parse', 'HEAD') != kopf:
+        raise Fehler(f'Branch {lauf["branch"]} hat sich während der Tests geändert')
+    merken(getestet=kopf, test_rc=rc, ergebnis=datei.read_text(encoding='utf-8', errors='replace')[-6000:])
+    _schritt(log, f'Tests {"grün" if rc == 0 else "rot"}')
 
-    1. Rebase auf main (eigener Stand wird als `rebase_kopf` gemerkt), Tests, wenn main seit dem Review Code geändert
-       hat (`getestet` = geprüfter Kopf), dann `--ff-only`; der Merge-SHA wird sofort gesichert.
-    2. Status `erledigt` – geprüft am committeten ROADMAP.md, nicht am Arbeitsverzeichnis.
-    3. Worktree und Branch entfernen (ohne Force; sonst Hinweis).
-    4. Push; ein Fehler lässt den Lauf fehlschlagen, `fortsetzen` holt ihn nach.
+
+def intern(lauf, log):
+    """Interne Schritte: `vorbereiten` (Rebase, Tests vor dem Review), Pflegeprüfung und Merge in wiederholbaren Schritten; jeder Schritt
+    gilt erst mit Nachweis im Git-Stand als erledigt.
+
+    Merge:
+    1. Alle Tore neu, auch beim Fortsetzen (offene Fragen, `_merge_pruefen` mit Vorschlagssperre, Masterplan, Pflegeumfang). Ist `main`
+       seit dem Review fachlich weiter oder sind die Vorgaben geändert, endet der Lauf ohne Merge (`neu_pruefen`), und die Kette geht zurück zu `vorbereiten`.
+    2. Sonst Rebase über die Statuscommits (`rebase_kopf`, `rebases`), Prüfung des neuen Stands, `--ff-only`; der Merge-SHA wird sofort gesichert.
+    3. Status `erledigt` – geprüft am committeten ROADMAP.md, nicht am Arbeitsverzeichnis.
+    4. Worktree und Branch entfernen (ohne Force; sonst Hinweis).
+    5. Push; ein Fehler lässt den Lauf fehlschlagen, `fortsetzen` holt ihn nach.
     """
     if lauf['art'] == 'pflege':
         from . import pflege
         return pflege.ausfuehren(lauf, log)
-    if lauf['art'] != 'mergen':
+    if lauf['art'] not in ('mergen', 'vorbereiten'):
         raise Fehler(f'Interner Schritt {lauf["art"]} unbekannt')
     p, aid = Projekt(lauf['projekt']), lauf['aufgabe']
     wt, basis, branch = lauf['worktree'], p.cfg['basis'], lauf['branch']
@@ -727,30 +862,43 @@ def intern(lauf, log):
         lauf.update(werte)
         laeufe.speichern(lauf)
 
+    if lauf['art'] == 'vorbereiten':
+        return _vorbereiten_intern(p, lauf, log, merken)
+
+    def pruefen():
+        try:
+            _merge_pruefen(p, branch, lauf['entwickler'], aid, gesperrt=True)
+        except (NeuPruefen, grundlage.VorgabenGeaendert) as e:
+            _masterplan_tor(p, aid, branch, gesperrt=True)  # ein Tor, das ohnehin sperrt, kostet kein neues Review
+            _pflege_tor(p, aid, branch, gesperrt=True)
+            if isinstance(e, grundlage.VorgabenGeaendert):  # wie in `mergen`: die Prüfung bekommt die geänderten Vorgaben mit
+                merken(vorgaben_geaendert=e.sachen, neu_pruefen=f'Vorgaben seit dem Review geändert ({e})')
+            else:
+                merken(neu_pruefen=str(e))
+            _schritt(log, f'{lauf["neu_pruefen"]}; kein Merge, zurück zu Vorbereitung, Tests und Review')
+            return False
+        return True
+
     with repo.sperre(p):
         if not lauf.get('merge'):
             _gesperrt(offene_fragen(p, aid))  # die Frage kann nach dem Start des Laufs gekommen sein
-            review = _merge_pruefen(p, branch, lauf['entwickler'], aid, lauf.get('rebase_kopf'), gesperrt=True)
+            if repo.rebase_abbrechen(wt):
+                _schritt(log, 'Rest eines unterbrochenen Rebase abgebrochen')
+            if not pruefen():
+                return
             repo.main_bereit(p, ('ROADMAP.md',))  # Hindernis für den Statuscommit vor jeder Nebenwirkung erkennen
-            if not lauf.get('review_basis'):
-                merken(review_basis=git(p.repo, 'merge-base', basis, review['kopf']))
             if not ok(p.repo, 'merge-base', '--is-ancestor', basis, branch):
-                ok(wt, 'rebase', '--abort')  # Rest eines unterbrochenen Rebase
-                if not ok(wt, 'rebase', '-q', basis):
-                    ok(wt, 'rebase', '--abort')
-                    raise Fehler(f'Rebase von {branch} auf {basis} mit Konflikten; Nacharbeit nötig')
-                merken(rebase_kopf=git(wt, 'rev-parse', 'HEAD'))
-            kopf = git(p.repo, 'rev-parse', f'refs/heads/{branch}')
+                ausgang, ziel = git(p.repo, 'rev-parse', f'refs/heads/{branch}'), git(p.repo, 'rev-parse', basis)
+                konflikt = repo.rebase(wt, ziel)
+                if konflikt is not None:
+                    raise Fehler(f'Rebase von {branch} auf {basis} mit Konflikten in {", ".join(konflikt)}; Nacharbeit nötig')
+                neu = git(wt, 'rev-parse', 'HEAD')
+                merken(rebase_kopf=neu, rebases=(lauf.get('rebases') or []) + [dict(ausgang=ausgang, ziel=ziel, kopf=neu)])
+                _schritt(log, f'Rebase über Statuscommits auf {ziel[:7]}')
+                if not pruefen():  # der neue Stand: nur ROADMAP.md anders als der reviewte
+                    return
             _masterplan_tor(p, aid, branch, gesperrt=True)  # auch nach dem Rebase: er macht aus einer Änderung am Masterplan keine erlaubte
             _pflege_tor(p, aid, branch, gesperrt=True)  # nach dem Rebase: geprüft wird genau der Stand, der gemergt wird
-            neu = [f for f in git(p.repo, 'diff', '--name-only', lauf['review_basis'], basis).split('\n')
-                   if f and f != 'ROADMAP.md']
-            if neu and lauf.get('getestet') != kopf and (befehl := _testbefehl(p, aid)):
-                _schritt(log, f'{basis} hat sich seit dem Review geändert ({len(neu)} Dateien); Tests nach Rebase')
-                argv = laeufe.befehl({**lauf, 'modell': 'shell', 'testlauf': True}, befehl)
-                if laeufe.befehl_ausfuehren(lauf, argv, log, log, cwd=wt):
-                    raise Fehler('Tests nach dem Rebase rot; Nacharbeit nötig')
-                merken(getestet=kopf)
             git(p.repo, 'merge', '-q', '--ff-only', branch)
             merken(merge=git(p.repo, 'rev-parse', 'HEAD'))
             _schritt(log, f'{branch} gemergt: {lauf["merge"][:7]}')
@@ -775,6 +923,14 @@ def intern(lauf, log):
 
 
 def _nach_merge(p, lauf):
+    if not lauf.get('merge') and lauf.get('neu_pruefen'):
+        aid = lauf['aufgabe']
+        protokoll(p, f'devflow · {aid}: {lauf["neu_pruefen"]}; kein Merge, zurück zu Vorbereitung, Tests und Review')
+        if lauf.get('automatisch'):
+            review_anfordern(p, aid, automatisch=True, vorgaben_geaendert=lauf.get('vorgaben_geaendert'))
+        else:
+            _stand(p, aid, stand=f'Kein Merge: {lauf["neu_pruefen"]}; neu prüfen mit review_anfordern'[:200])
+        return
     _vorschlag().gemergt(lauf)
     if lauf.get('automatisch') and p.cfg['deploy']:
         grund = _pflege().deploy_grund(p, lauf['aufgabe'])

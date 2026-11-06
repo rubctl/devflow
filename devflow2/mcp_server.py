@@ -1,10 +1,11 @@
 """MCP-Server „devflow“ (stdio): Werkzeuge für die steuernde KI. Dünne Hülle um ablauf.py."""
 import functools
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
-from . import Fehler, ablauf, plaene, pflegeplan, projekte, selbstlauf
+from . import Fehler, ablauf, mcp_wechsel, plaene, pflegeplan, projekte, selbstlauf
 from . import inhaber as _i
 from . import eingang as ideen
 from .projekte import Projekt
@@ -12,7 +13,7 @@ from .projekte import Projekt
 def anleitung():
     """Anleitung für die steuernde KI; der Inhaber steht mit Name bzw. Rolle aus `instanz.toml` darin."""
     return f"""devflow 2: Du steuerst die Umsetzung abgenommener Pläne. {_i.nom_gross()} überwacht und entscheidet.
-Ablauf: plan_uebernehmen → entwickeln(automatisch=True) startet die Kette entwickeln → testen → Review → bis zu zwei
+Ablauf: plan_uebernehmen → entwickeln(automatisch=True) startet die Kette entwickeln → vorbereiten (Rebase, Tests) → Review → bis zu zwei
 Nacharbeitsrunden → mergen → deployen (falls hinterlegt). Den Fortschritt siehst du mit lage() und lauf(id).
 Läufe dauern Minuten bis Stunden; nicht im Sekundentakt abfragen. Was {_i.nom()} entscheiden muss, als frage_stellen().
 Nach antwort_eintragen() die Antwort selbst mit nacharbeit(hinweise=…) an den Entwickler geben. Ein Lauf mit Fehler
@@ -116,7 +117,7 @@ def status_setzen(projekt: str, id: str, status: str, wer: str = '', details: st
 
 @werkzeug
 def frage_stellen(projekt: str, frage: str, optionen: list[str], empfehlung: str, aufgabe_id: str = '') -> dict:
-    """Offene Frage {an} in die Roadmap; mit aufgabe_id geht die Aufgabe auf „Braucht dich“ und ist gesperrt, bis die Antwort da ist."""
+    """Offene Frage {an} in die Roadmap; mit aufgabe_id geht die Aufgabe auf „Braucht dich“ und ist gesperrt, bis die Antwort da ist. Beginne die Empfehlung mit „Option N“ (Nummer aus optionen), dann genügt im Dashboard ein Tipp auf „Empfehlung annehmen“. Empfehlung: nur „Option N“; die Begründung gehört in die Frage."""
     if satz == 'planung' and aufgabe_id:
         raise ToolError('Ein Planungslauf ändert keine Aufgaben; Frage ohne aufgabe_id stellen')
     return ablauf.frage_stellen(Projekt(projekt), frage, optionen, empfehlung, aufgabe_id or None)
@@ -160,7 +161,7 @@ def testen(projekt: str, id: str) -> dict:
 
 @werkzeug
 def review_anfordern(projekt: str, id: str, reviewer: str = '', automatisch: bool = True) -> dict:
-    """Review des anderen Modells (Standard: Sol) auf dem aktuellen Commit der Aufgabe."""
+    """Review des anderen Modells (Standard: Sol) auf dem aktuellen Commit der Aufgabe; fehlt dessen Vorbereitung (Rebase auf main, Tests), läuft sie zuerst."""
     return ablauf.review_anfordern(Projekt(projekt), id, reviewer or None, automatisch)
 
 
@@ -210,7 +211,14 @@ def begrenzen(name):
         server.remove_tool(w)
 
 
+async def _laufen():
+    """Wie `FastMCP.run_stdio_async`, aber mit dem Transport, der nach einem Deploy zwischen zwei Aufrufen die aktive Fassung lädt (S14.5).
+    Nur die Sitzung wechselt; ein Steuerlauf (`satz`) bleibt bei seiner Fassung."""
+    async with mcp_wechsel.stdio(wechseln=not satz) as (lesen, schreiben):
+        await server._mcp_server.run(lesen, schreiben, server._mcp_server.create_initialization_options())
+
+
 def main(name=''):
     if name:
         begrenzen(name)
-    server.run()
+    anyio.run(_laufen)

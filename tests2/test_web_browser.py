@@ -16,7 +16,7 @@ import threading
 import time
 import unittest
 
-from devflow2 import laeufe, web, inhaber
+from devflow2 import ablauf, laeufe, web, inhaber
 from web_daten import aufbauen
 
 HIER = Path(__file__).resolve().parent
@@ -57,7 +57,7 @@ class BrowserTest(unittest.TestCase):
         fall, ids, port = self.server()
         seiten = ['/', '/p/demo', '/p/demo/a/A1', '/p/demo/a/A2', '/p/demo/a/A3', f'/lauf/{ids["fertig"]}',
                   f'/lauf/{ids["review"]}', f'/lauf/{ids["laufend"]}', '/p/demo/md/', '/p/demo/md/plan/wetter.md',
-                  '/p/demo/md/berichte/A1.md?zweig=claude-a1', '/p/demo/md/ROADMAP.md', '/p/demo/roadmap', '/p/demo/eingang', '/p/demo/pflege', '/kontingent', '/plaene', '/p/demo/plan/wetter', '/hinweise']
+                  '/p/demo/md/berichte/A1.md?zweig=claude-a1', '/p/demo/md/ROADMAP.md', '/p/demo/roadmap', '/p/demo/eingang', '/p/demo/pflege', '/kontingent', '/plaene', '/p/demo/plaene', '/p/demo/plan/wetter', '/hinweise']
         r = subprocess.run([NODE, str(HIER / 'browser' / 'web.cjs'), PLAYWRIGHT, f'http://127.0.0.1:{port}', 'inhaber@github',
                             str(laeufe.verzeichnis(ids['laufend']) / 'log.jsonl'), ids['laufend'], json.dumps(seiten)],
                            capture_output=True, text=True, timeout=180)
@@ -78,6 +78,33 @@ class BrowserTest(unittest.TestCase):
         self.assertIn('Aktionsprobe bestanden', r.stdout)
         self.assertIn(f'Antwort {inhaber.kennung()}', fall.roadmap())
         self.assertTrue(laeufe.angehalten())
+    def test_entscheidungsliste_bei_390_px(self):
+        # S14.3: „Braucht dich“ als Liste: kein waagrechtes Scrollen, Knopf neben der Überschrift, Aufklappen per Tastatur und Tippen.
+        fall, ids, port = self.server()
+        ablauf.frage_stellen(fall.p, 'Wann soll es starten?', ['heute', 'morgen'], 'Ich würde früh anfangen, aber das hängt vom Kontingent ab', 'A2')  # ohne eindeutige Empfehlung
+        r = subprocess.run([NODE, str(HIER / 'browser' / 'liste.cjs'), PLAYWRIGHT, f'http://127.0.0.1:{port}', 'inhaber@github'],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == SKIP:
+            self.skipTest(r.stderr.strip())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('Listenprobe bestanden', r.stdout)
+        self.assertEqual(fall.roadmap().count('Empfehlung angenommen: Option 1, Celsius'), 1)  # trotz Doppelklick nur einmal
+
+    def test_plaene_seite_bei_390_px(self):
+        # S14.3b: Gruppen mit Knopf und eingeklapptem „Erledigt“ ohne waagrechtes Scrollen, zu und aufgeklappt.
+        from test_web_plaene import abgenommen, lege_plaene, plantext
+        fall, ids, port = self.server()
+        lege_plaene(fall.repo, {
+            'entwurf': plantext('Entwurf mit einem sehr langen Titel ohne Leerzeichen' + 'x' * 60 + ' · Claude · 05.11.2026', 'Entwurf', 'E1', 'E2'),
+            'fertig': plantext('Fertig · Claude · 01.11.2026', abgenommen('01.11.2026'), 'F1'),
+        }, [('F1', 'erledigt')])
+        r = subprocess.run([NODE, str(HIER / 'browser' / 'plaene.cjs'), PLAYWRIGHT, f'http://127.0.0.1:{port}', 'inhaber@github', '/p/demo/plaene', '/plaene'],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode == SKIP:
+            self.skipTest(r.stderr.strip())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('Pläneprobe bestanden', r.stdout)
+
     def test_app_offline_installieren_neue_version(self):
         # PWA (S4.2): Manifest gültig, Service Worker aktiv, Seite offline mit Hinweis, POST offline gesperrt.
         fall, ids, port = self.server()

@@ -6,10 +6,11 @@ Skills für Claude Code, die zu devflow gehören. Sie liegen im Repo, damit sie 
 |---|---|
 | [`planungssitzung`](planungssitzung/SKILL.md) | Ein Vorhaben mit dem Inhaber planen: Fragen mit Empfehlung, Grundentscheidungen, begrenzte Recherche, Entwurf |
 | [`neues-projekt`](neues-projekt/SKILL.md) | Neues Projekt anlegen (grüne Wiese oder GitHub-URL), mit dem Inhaber Masterplan (auf Wunsch aus vorhandenem Material), Grundentscheidungen mit Betrieb und grobe Roadmap erarbeiten, anmelden |
+| [`discovery`](discovery/SKILL.md) | Discovery auswerten (Transkripte und Notizen in Prozess- und Faktorenkatalog einordnen, Lücke Ist → Soll als EARS-Anforderungen), Gespräche vorbereiten, Stand auf einer halben Seite |
 
 ## Einrichtung
 
-Auf einer Arbeitsinstanz, die mit `ops/installieren.sh` eingerichtet wurde, verlinkt der Installer beide Skills selbst (nach `~/.claude/skills/`, Ziel `~/.local/share/devflow2/aktiv/skills/…`, siehe [Installation](../docs/installation.md#mcp-server-und-skills-für-claude-schritt-6)); gleichnamige fremde Skills lässt er unberührt. Von Hand, etwa auf dem Entwicklungsrechner:
+Auf einer Arbeitsinstanz, die mit `ops/installieren.sh` eingerichtet wurde, verlinkt der Installer alle drei Skills selbst (nach `~/.claude/skills/`, Ziel `~/.local/share/devflow2/aktiv/skills/…`, siehe [Installation](../docs/installation.md#mcp-server-und-skills-für-claude-schritt-6)); gleichnamige fremde Skills lässt er unberührt. Von Hand, etwa auf dem Entwicklungsrechner:
 
 Claude Code liest persönliche Skills aus `~/.claude/skills/<name>/SKILL.md`. Einmal je Rechner, wiederholbar:
 
@@ -17,9 +18,10 @@ Claude Code liest persönliche Skills aus `~/.claude/skills/<name>/SKILL.md`. Ei
 mkdir -p ~/.claude/skills
 ln -sfn ~/dev/devflow/skills/planungssitzung ~/.claude/skills/planungssitzung
 ln -sfn ~/dev/devflow/skills/neues-projekt ~/.claude/skills/neues-projekt
+ln -sfn ~/dev/devflow/skills/discovery ~/.claude/skills/discovery
 ```
 
-Der Link zeigt auf den Checkout von `main`; ein gemergter Stand gilt damit ab der nächsten Sitzung. Prüfen: In Claude Code `/planungssitzung` bzw. `/neues-projekt` eintippen, der Skill erscheint in der Liste. Ohne Link (oder bei einem Rechner ohne den Checkout) den Ordner des Skills nach `~/.claude/skills/` kopieren.
+Der Link zeigt auf den Checkout von `main`; ein gemergter Stand gilt damit ab der nächsten Sitzung. Prüfen: In Claude Code `/planungssitzung`, `/neues-projekt` bzw. `/discovery` eintippen, der Skill erscheint in der Liste. Ohne Link (oder bei einem Rechner ohne den Checkout) den Ordner des Skills nach `~/.claude/skills/` kopieren.
 
 ## Benutzen
 
@@ -34,3 +36,10 @@ Die Sitzung läuft aus deinem Kontingent, nicht aus dem Budget des Selbstlaufs.
 1. Claude Code im Checkout von devflow starten (das Skript liegt unter `ops/`), mit Opus.
 2. `/neues-projekt <Name>` und den Einstieg wählen: grüne Wiese oder vorhandenes Repo per URL.
 3. Fragen beantworten; am Ende die Zusammenfassung lesen und das OK geben. Danach ist das Projekt committet und angemeldet. Die Entscheidungsvorschläge bestätigst du selbst, dann `/planungssitzung <erstes Vorhaben>` im neuen Projekt.
+
+### Discovery
+
+1. Claude Code im Projekt starten, das mit „Discovery zuerst“ angelegt wurde (mit `discovery/` und `material/`), mit Opus.
+2. Gespräche aufnehmen und mit `ops/transkribieren.sh` ablegen (siehe [Discovery](../docs/discovery.md)); Notizen und Stichworte einfach nach `material/neu/` legen.
+3. `/discovery` („werte aus“): Claude ordnet das Neue in den Katalog ein, zeigt eine Vorschau und stellt höchstens drei Rückfragen mit Empfehlung. Erst nach deinem OK wird geschrieben, geprüft und `discovery/` committet; `material/` nie.
+4. `/discovery vorbereiten <Rolle>` liefert einen Gesprächsleitfaden, `/discovery stand` die halbe Seite mit den nächsten drei Schritten und der Rolle, mit der du als Nächstes reden solltest.

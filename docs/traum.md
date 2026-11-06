@@ -73,6 +73,8 @@ Traumläufe tragen `traum` und `bis`, haben die Art `traum` (Zweitmeinung `meinu
 
 ## Vorschläge
 
+Traumbericht und Berichte der Vorschläge beginnen mit `**Kurz:**` (höchstens drei Zeilen, [Kurzfassung](dashboard.md#kurzfassung-s141)); in „Braucht dich“ steht ein Vorschlag als Zeile mit dem Knopf „Übernehmen“, die Kurzfassung klappt per Klick auf ([Entscheidungsliste](dashboard.md#übersicht-s43)).
+
 Änderungen aus dem Traum kommen als Vorschlag zum Inhaber: ein eigener Branch mit Bericht, der bis zu „Übernehmen“ weder gemergt noch deployt werden kann. Es gibt höchstens drei je Projekt und Traum.
 
 **Register:** `vorschlaege/<id>.json` im Zustandsverzeichnis. Der Eintrag entsteht, bevor es den Branch gibt, und bleibt für immer, auch nach „Verwerfen“. Die ID ist `traum-<traum-id>-<thema>`, der Branch `traum/<traum-id>-<thema>`, der Worktree `<repo>-traum-<traum-id>-<thema>`. Ein Thema kommt je Traum nur einmal vor, auch über Projekte hinweg.
@@ -110,7 +112,7 @@ Der Baulauf hat keine Shell, kein Git und kein MCP. Schreiben darf er nur im eig
 - **Bestandenes Gegenreview auf genau diesem Stand:** Merge wie immer (Rebase, Tests, falls `main` sich geändert hat, `--ff-only`), danach der Deploy aus `devflow.toml`.
 - **Sonst:** Das Gegenreview startet, gemergt wird erst danach, mit der normalen Kette einschließlich Nacharbeit. Fehlte Sol im Traum das Kontingent, ist das der normale Weg.
 
-Erlaubt ist beim Merge nur der freigegebene Commit, dazu der Reviewbericht, den devflow selbst darauf committet, und devflows eigener Rebase. Hat sich der Branch sonst geändert, etwa durch Nacharbeit, verfällt die Freigabe: Der Vorschlag ist wieder `offen`, die Aufgabe steht auf „Braucht dich“, und der Inhaber stimmt dem neuen Stand zu oder verwirft ihn.
+Erlaubt ist beim Merge nur der freigegebene Commit, dazu der Reviewbericht, den devflow selbst darauf committet, und devflows Rebases davon (vor dem Review und beim Merge über Statuscommits, siehe [Merge-Tor](architektur.md#merge-tor-s142)). Ist `main` seit dem Traum-Review fachlich weiter, startet „Übernehmen“ statt des Merges Vorbereitung und neues Review. Hat sich der Branch sonst geändert, etwa durch Nacharbeit, verfällt die Freigabe: Der Vorschlag ist wieder `offen`, die Aufgabe steht auf „Braucht dich“, und der Inhaber stimmt dem neuen Stand zu oder verwirft ihn.
 
 **Verwerfen** (`POST /traum/vorschlag/<id>/verwerfen`, nur Dashboard): Entfernt genau den registrierten Branch und Worktree, ausdrücklich auch ungemergt, mit `--force` und `-D`. Das ist die einzige Ausnahme von „ohne Force“. Nicht entfernt wird, was nur so heißt: Der Branch muss den registrierten Stand enthalten, der Worktree muss in `git worktree list` auf diesem Branch stehen. Was nicht passt, bleibt stehen, und ein Hinweis nennt es. Solange ein Lauf aktiv ist oder wenn schon gemergt wurde, lehnt devflow ab. Der Bericht und die Entscheidung landen in `berichte/<id>.md` auf `main` und im Protokoll, eine angelegte Aufgabe geht auf `entfällt`.
 

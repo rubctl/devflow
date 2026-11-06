@@ -16,6 +16,7 @@ Eine Sitzung je Projekt, mit Opus, aus dem Kontingent des Inhabers. Ablauf: Eins
 - **Entscheidungen:** nur Status `vorgeschlagen`. `bestätigt vom Inhaber` setzt nur der Inhaber.
 - **Nicht ohne den Inhaber:** Zugangsdaten, kostenpflichtige Dienste, Deploy, Löschen. Keine Geheimnisse in Dateien; Variablen nur mit Namen.
 - **Anmelden und Committen** erst nach ausdrücklichem OK des Inhabers am Schluss. Die Aufgabentabelle der Roadmap bleibt leer: Aufgaben entstehen erst in der Planungssitzung des Vorhabens.
+- **Kurzfassung:** Zusammenfassungen und alles, was der Inhaber am Handy liest, beginnen mit höchstens drei Zeilen bzw. Punkten; das Folgeprojekt wird mit der Planungssitzung geplant, deren Pläne den Abschnitt `## Kurz` tragen müssen.
 - Recherche und Datengrenze wie in der Planungssitzung: nur öffentliche technische Begriffe, nie Firmen-, Kunden- oder Personendaten, interne URLs, Schemata.
 
 ## Schritt 1: Einstieg wählen
@@ -83,7 +84,7 @@ Abschnitt „Vorhaben (grob)“ in `ROADMAP.md`: Vorhaben in sinnvoller Reihenfo
 ## Schritt 7: Abschluss
 
 1. Lauf `python3 werkzeuge/roadmap.py` im Projekt (Kanban erneuern, Status prüfen); bei einem Fehler beheben.
-2. Zeige dem Inhaber die Änderungen (`git status`, `git diff --stat`) und eine Zusammenfassung: Masterplan, Entscheidungsvorschläge (Nummern, Status), offene Punkte, grobe Roadmap.
+2. Zeige dem Inhaber die Änderungen (`git status`, `git diff --stat`) und eine Zusammenfassung, die mit einer **Kurzfassung von höchstens drei Zeilen** beginnt (was angelegt ist, was er jetzt entscheiden muss, zuerst die Entscheidung); danach auf Nachfrage das Übrige: Masterplan, Entscheidungsvorschläge (Nummern, Status), offene Punkte, grobe Roadmap.
 3. Nach dem OK des Inhabers: `git status` ansehen und genau die Dateien aufnehmen, die das Skript unter „Angelegt“ nannte (bei einem Klon sind sie alle noch unversioniert) plus deine Änderungen, nichts Fremdes; committen (`projekt: Masterplan, Grundentscheidungen, grobe Roadmap`), dann `projekt_anmelden(pfad, name)`. Bei einem Klon bleibt der Commit lokal; **kein Push** ohne Wort des Inhabers.
 4. Sage dem Inhaber als nächsten Schritt: Entscheidungen bestätigen (er setzt den Status), dann `/planungssitzung <erstes Vorhaben>`.
 

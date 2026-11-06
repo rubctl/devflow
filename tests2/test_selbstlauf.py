@@ -28,6 +28,10 @@ ENTWURF = """# Vorhaben Neu · Claude · 30.10.2026
 
 Nach der Abnahme durch den Inhaber wird diese Zeile genau so ersetzt: `**Stand:** abgenommen vom Inhaber am TT.MM.JJJJ`.
 
+## Kurz
+
+- Test.
+
 ## Aufgaben
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |

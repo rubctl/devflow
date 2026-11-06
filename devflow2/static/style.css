@@ -90,6 +90,13 @@ section { margin-bottom: var(--space-4); }
 .hinweis { border-left: 4px solid var(--warn); background: var(--panel); padding: var(--space-2) var(--space-3); margin: var(--space-3) 0; }
 .fehler { color: var(--error); white-space: pre-wrap; }
 
+/* Kurzfassung (S14.1): ganz oben, hervorgehoben, höchstens drei Zeilen */
+.kurz { border-left: 4px solid var(--signal); background: var(--panel-raised); border-radius: var(--radius-md); padding: var(--space-3); margin: var(--space-3) 0; min-width: 0; overflow-wrap: anywhere; }
+.kurz > * { margin: 0; }
+.kurz > * + * { margin-top: var(--space-1); }
+.kurz ul, .kurz ol { padding-left: var(--space-5); }
+.kurz-kopf { display: block; font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
+
 /* Kanban */
 .kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr)); gap: var(--space-3); }
 .spalte { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3); min-width: 0; }
@@ -190,3 +197,23 @@ table.roadmap-tabelle th.id { font-weight: 600; white-space: nowrap; }
 .liste.gruppen > li.gruppe { background: none; border: 0; padding: 0; margin-bottom: var(--space-3); }
 .gruppe > h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm, 0.9rem); color: var(--muted, inherit); }
 .gruppe > .liste li:last-child { margin-bottom: 0; }
+
+/* Entscheidungsliste (S14.3): Überschrift links, Knopf daneben; Kurzfassung und Details klappen unter der Überschrift auf */
+.liste.entscheidungen > li.eintrag { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: start; }
+.eintrag > details { margin: 0; min-width: 0; }
+.eintrag > details > summary { color: var(--text-strong); overflow-wrap: anywhere; min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.eintrag > details > summary .titel { font-weight: 600; }
+.eintrag > .knopf { max-width: 9.5rem; }
+.eintrag > .knopf form.aktion { margin: 0; }
+.eintrag > .knopf .rc-btn { width: 100%; justify-content: center; text-align: center; white-space: normal; }
+.eintrag .details { margin-top: var(--space-2); overflow-wrap: anywhere; }
+.eintrag .details .md, .eintrag .details table { max-width: 100%; overflow-x: auto; }
+ul.stufenliste { margin: var(--space-1) 0; padding-left: 1.2rem; }
+.klaerung > li.eintrag { border-color: var(--warn); }
+details.info { margin-top: var(--space-3); }
+
+/* Pläne je Projekt (S14.3b): Erledigtes eingeklappt unten */
+details.erledigt { margin-top: var(--space-4, 1.5rem); }
+details.erledigt > summary { min-height: 44px; display: flex; align-items: center; font-weight: 600; }
+.plangruppe { margin-top: var(--space-3); }
+.plangruppe > h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm, 0.9rem); color: var(--muted, inherit); }

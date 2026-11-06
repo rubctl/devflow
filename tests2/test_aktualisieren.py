@@ -423,6 +423,30 @@ class SkriptTest(unittest.TestCase):
         return subprocess.run(['bash', str(SKRIPT), '--version', 'v2.1', *args], cwd=self.checkout, capture_output=True, text=True,
                               env={**self.env, **env})
 
+    def test_transkription_nur_mit_option_in_eigener_umgebung(self):
+        r = self.lauf()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn('ops/installieren.sh --mit-transkription', r.stdout)  # sagt klar, was fehlt
+        self.assertFalse((self.home / 'transkription').exists())
+        self.assertNotIn('faster-whisper', self.log.read_text())
+        r = self.lauf('--mit-transkription')
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        tvenv = self.home / 'transkription' / '.venv'
+        self.assertTrue((tvenv / 'bin' / 'python').is_file())
+        log = self.log.read_text()
+        self.assertIn(f'uv venv --clear --python 3.11 {tvenv}', log)
+        self.assertIn(f'uv pip install --python {tvenv}/bin/python faster-whisper', log)
+        self.assertIn('faster-whisper eingerichtet', r.stdout)
+
+    def test_transkription_scheitert_laut_ohne_den_rest_zu_beschaedigen(self):
+        (self.tmp / 'bin' / 'uv').write_text((self.tmp / 'bin' / 'uv').read_text().replace('if [ "$1" = venv ]', 'if [[ " $* " == *" faster-whisper "* ]]; then exit 1; fi\nif [ "$1" = venv ]'))
+        r = self.lauf('--mit-transkription')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('faster-whisper ließ sich nicht installieren', r.stderr)
+        self.assertFalse((self.home / 'transkription' / '.venv').exists())
+        self.assertTrue((self.home / 'versionen' / 'v2.1' / '.fertig').is_file())  # alles andere ist fertig
+        self.assertTrue(self.einheit.is_file())
+
     def test_installation_und_wiederholung_aendern_beim_zweiten_mal_nichts(self):
         r = self.lauf()
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
@@ -469,7 +493,7 @@ class SkriptTest(unittest.TestCase):
         self.assertIn(f'Command: {aktiv}/.venv/bin/python', gespeichert)
         self.assertIn('MCP-Server \'devflow\' (Scope user)', r.stdout)
         skills = self.tmp / 'h' / '.claude' / 'skills'
-        for name in ('planungssitzung', 'neues-projekt'):
+        for name in ('planungssitzung', 'neues-projekt', 'discovery'):
             link = skills / name
             self.assertTrue(link.is_symlink())
             self.assertEqual(os.readlink(link), f'{aktiv}/skills/{name}')  # über aktiv, nicht über versionen/v2.1
@@ -481,11 +505,11 @@ class SkriptTest(unittest.TestCase):
         os.replace(self._link(neu), aktiv)
         self.assertEqual((skills / 'planungssitzung' / 'SKILL.md').read_text(), 'neu\n')
         # zweiter Aufruf: kein weiteres `mcp add`, nichts verändert
-        vorher = (gespeichert, [os.readlink(skills / n) for n in ('planungssitzung', 'neues-projekt')])
+        vorher = (gespeichert, [os.readlink(skills / n) for n in ('planungssitzung', 'neues-projekt', 'discovery')])
         r2 = self.lauf()
         self.assertEqual(r2.returncode, 0, r2.stderr + r2.stdout)
         self.assertEqual(sum(1 for z in self.mcp_aufrufe() if z.startswith('claude mcp add')), 1)
-        self.assertEqual(vorher, (self.speicher.read_text(), [os.readlink(skills / n) for n in ('planungssitzung', 'neues-projekt')]))
+        self.assertEqual(vorher, (self.speicher.read_text(), [os.readlink(skills / n) for n in ('planungssitzung', 'neues-projekt', 'discovery')]))
         self.assertIn('zeigt schon auf', r2.stdout)
         self.assertIn('Skill planungssitzung ist schon verlinkt', r2.stdout)
 

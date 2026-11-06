@@ -160,8 +160,7 @@ class WegeBasis(Fall):
 
     def review(self):
         l = self.entwickelt()
-        r = ablauf.review_anfordern(self.p, 'A1', automatisch=False)
-        self.warten(lambda: laeufe.laden(r['id'])['zustand'] == 'fertig', text='Review')
+        self.review_fertig(automatisch=False)
         return l
 
     def angehalten(self, herkunft):

@@ -134,13 +134,25 @@ class Fall(unittest.TestCase):
         laeufe_info = [(l['id'], l['zustand'], l.get('fehler')) for l in laeufe.alle()]
         self.fail(f'Zeitüberschreitung {text}: Status {[(a["id"], a["status"], a["details"]) for a in roadmap.aufgaben(self.roadmap())]}, Läufe {laeufe_info}')
 
+    def review_fertig(self, aufgabe='A1', projekt='demo', **kw):
+        """`review_anfordern` und warten, bis das neue Review fertig ist. Davor läuft die Vorbereitung (Rebase, Tests, S14.2)."""
+        from devflow2 import ablauf
+        vorher = len([l for l in laeufe.alle(projekt, aufgabe) if l['art'] == 'review'])
+        ablauf.review_anfordern(Projekt(projekt), aufgabe, **kw)
+
+        def neu():
+            rs = [l for l in laeufe.alle(projekt, aufgabe) if l['art'] == 'review'][vorher:]
+            return rs[0] if rs and rs[0]['zustand'] == 'fertig' else None
+        self.warten(lambda: neu() is not None, text=f'Review {aufgabe}')
+        return neu()
+
     def ruhig(self):
         """Warten, bis kein Lauf mehr aktiv ist."""
         self.warten(lambda: all(l['zustand'] not in laeufe.AKTIV for l in laeufe.alle()), text='bis Ruhe')
 
     @staticmethod
-    def bestanden(bericht='# Review\n\nBestanden.'):
-        return {'tue': 'urteil', 'urteil': {'urteil': 'bestanden', 'befunde': [], 'bericht': bericht}}
+    def bestanden(bericht='# Review\n\nBestanden.', kurz=None):
+        return {'tue': 'urteil', 'urteil': {'urteil': 'bestanden', 'befunde': [], 'bericht': bericht, **({'kurz': kurz} if kurz else {})}}
 
     @staticmethod
     def nacharbeit(was='Grenzfall fehlt'):

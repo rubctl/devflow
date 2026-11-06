@@ -13,6 +13,7 @@ Dauerhaftes Wissen über das Projekt. Ändert sich der Code, ändert sich die pa
 - [Dashboard](dashboard.md): Oberfläche, Start, Zugang, Seiten, Handlungen, Aufbau
 - [Pflege](pflege.md): Prüfung auf Sicherheitslücken und veraltete Pakete, Werkzeuge, Einstellungen, Start
 - [Traum](traum.md): Dreaming von Hand: Start, Grenzen, Reihenfolge, Bedienung, Traumbericht
+- [Discovery](discovery.md): Prozess- und Faktorenkatalog, Stände, Prüfung und Übersicht
 - [Entscheidungen](entscheidungen/): warum etwas so ist, wie es ist
 
 ## Regeln

@@ -17,6 +17,10 @@ ENTWURF = """# Vorhaben X · Claude · 03.11.2026
 
 **Stand:** Entwurf
 
+## Kurz
+
+- Test.
+
 ## Aufgaben
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |

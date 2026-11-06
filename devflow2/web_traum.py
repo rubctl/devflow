@@ -12,7 +12,7 @@ from starlette.routing import Route
 
 from . import Fehler, kontingent, traum, vorschlag, web_html
 from .projekte import NAMEN, Projekt
-from .web_aktion import NAME, SPERRE, ZUGANG, _formular, _knopf, _nicht_moeglich, _weiter, meldung
+from .web_aktion import NAME, SPERRE, ZUGANG, _formular, _knopf, _nicht_moeglich, _weiter, meldung, ziel_nach
 from .web_html import t
 from .web_md import md
 
@@ -82,8 +82,8 @@ def _uebernehmen_knopf(v, stand, bestanden):
                                                           bestaetigen=f'Genau den Stand {stand[:7]} übernehmen?', klasse='rc-btn-primary'))
 
 
-def _verwerfen_knopf(v):
-    return _knopf(f'/traum/vorschlag/{quote(v["id"])}/verwerfen', 'Verwerfen', bestaetigen=f'Branch {v["branch"]} und seinen Worktree entfernen, auch ungemergt?')
+def _verwerfen_knopf(v, stand):
+    return _knopf(f'/traum/vorschlag/{quote(v["id"])}/verwerfen', 'Verwerfen', t('input', type='hidden', name='gesehen', value=stand or ''), bestaetigen=f'Branch {v["branch"]} und seinen Worktree entfernen, auch ungemergt?')
 
 
 def _vorschlag(v):
@@ -99,7 +99,7 @@ def _vorschlag(v):
         teile.append(t('details', t('summary', 'Bericht und Änderungen'), md(v['bericht']), t('pre', stat) if stat else None))
     if v['zustand'] == 'offen':
         teile.append(_uebernehmen_knopf(v, stand, bool(r and r['urteil'] == 'bestanden')))
-    return t('article', *teile, _verwerfen_knopf(v), class_='rc-card', id=v['id'])
+    return t('article', *teile, _verwerfen_knopf(v, stand), class_='rc-card', id=v['id'])
 
 
 def vorschlaege_abschnitt():
@@ -191,8 +191,9 @@ def _uebernehmen(vid, gesehen):
 
 
 async def vorschlag_uebernehmen(request):
-    vid, zurueck = _vid(request), '/traum#vorschlaege'
-    gesehen = (await _formular(request)).get('gesehen', '')
+    vid = _vid(request)
+    form = await _formular(request)
+    zurueck, gesehen = ziel_nach(form, '/traum#vorschlaege'), form.get('gesehen', '')
     try:
         code = await run_in_threadpool(_uebernehmen, vid, gesehen)
     except Fehler as err:
@@ -200,16 +201,17 @@ async def vorschlag_uebernehmen(request):
     return _weiter(zurueck, f'vorschlag-{code}')
 
 
-def _verwerfen(vid):
+def _verwerfen(vid, gesehen):
     with SPERRE:
-        return vorschlag.verwerfen(vid, ZUGANG)
+        return vorschlag.verwerfen(vid, ZUGANG, gesehen)
 
 
 async def vorschlag_verwerfen(request):
-    vid, zurueck = _vid(request), '/traum#vorschlaege'
-    await _formular(request)
+    vid = _vid(request)
+    form = await _formular(request)
+    zurueck = ziel_nach(form, '/traum#vorschlaege')
     try:
-        neu = await run_in_threadpool(_verwerfen, vid)
+        neu = await run_in_threadpool(_verwerfen, vid, form.get('gesehen', 'fehlt'))
     except Fehler as err:
         return _nicht_moeglich(str(err), zurueck)
     return _weiter(zurueck, 'vorschlag-verworfen' if neu else 'vorschlag-schon-verworfen')

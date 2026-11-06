@@ -5,7 +5,7 @@ reviewen als Hintergrundläufe, ein Mensch überwacht und entscheidet. Der Stand
 (`ROADMAP.md`, `plan/`, `berichte/`, `docs/`); devflow hält lokal nur den Laufzustand. Mehr in [`DEVFLOW2.md`](DEVFLOW2.md) und im
 Wiki unter [`docs/`](docs/README.md).
 
-Dieses Repo ist ein **Release** (Version v2.1): ein Commit mit Tag je Version, nur Code, ohne Entwicklungsverlauf, Pläne und Berichte.
+Dieses Repo ist ein **Release** (Version v2.2): ein Commit mit Tag je Version, nur Code, ohne Entwicklungsverlauf, Pläne und Berichte.
 
 ## Voraussetzungen
 

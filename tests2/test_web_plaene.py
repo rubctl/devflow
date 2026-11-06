@@ -1,13 +1,14 @@
 """Pläne abnehmen (S3.3): Liste, Planansicht, Abnehmen mit Stufen, Änderung wünschen, Schutz, Ereignis."""
 import logging
+import re
 import unittest
 import warnings
 
 warnings.filterwarnings('ignore', 'Using `httpx`')
 from starlette.testclient import TestClient  # noqa: E402
 
-from devflow2 import ablauf, ereignis, plaene, roadmap, web, inhaber  # noqa: E402
-from hilfen import Fall, git  # noqa: E402
+from devflow2 import ablauf, ereignis, plaene, projekte, roadmap, web, inhaber  # noqa: E402
+from hilfen import ROADMAP, Fall, git  # noqa: E402
 
 LOGIN = {'Tailscale-User-Login': 'inhaber@github'}
 HERKUNFT = {**LOGIN, 'Origin': 'http://testserver'}
@@ -200,9 +201,10 @@ class SeitenTest(Basis):
     def test_liste_zeigt_stand_je_projekt_und_planansicht_stufenwahl(self):
         s = self.client.get('/plaene').text
         self.assertIn('href="/p/demo/plan/wetter"', s)
-        self.assertIn('Entwurf', s)
+        kopf(self, s, 'Zur Abnahme', 1)
         self.assertNotIn('plan/_vorlage', s)
-        self.assertIn('href="/plaene"', self.client.get('/p/demo').text)
+        self.assertIn('href="/p/demo/plaene"', self.client.get('/p/demo').text)
+        self.assertNotIn('href="/plaene"', self.client.get('/p/demo').text)
         s = self.client.get('/p/demo/plan/wetter').text
         self.assertIn('action="/p/demo/plan/wetter/abnehmen"', s)
         self.assertIn('action="/p/demo/plan/wetter/aenderung"', s)
@@ -227,6 +229,191 @@ class SeitenTest(Basis):
     def test_rueckmeldung_sichtbar_in_der_liste(self):
         self.post('aenderung', {'wunsch': 'x'})
         self.assertIn('Änderung gewünscht', self.client.get('/plaene').text)
+
+
+def felder(html, aktion):
+    """Die versteckten Felder des Formulars mit dieser Aktion, so wie der Browser sie senden würde."""
+    form = re.search(r'<form method="post" action="' + re.escape(aktion) + r'"[^>]*>(.*?)</form>', html, re.S)
+    assert form, f'kein Formular {aktion}'
+    return dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', form.group(1)))
+
+
+def kopf(test, html, gruppe, n):
+    """Überschrift der Gruppe mit Anzahl: auf der Projektseite als Kicker, auf der globalen Seite als h3."""
+    test.assertRegex(html, rf'{gruppe}<span class="rc-kicker-num">\({n}\)</span>|<h3>{gruppe} \({n}\)</h3>')
+
+
+def plantext(titel, stand, *ids):
+    zeilen = ''.join(f'| {i} | Aufgabe {i} | claude | `a.py` | Test grün | |\n' for i in ids)
+    return (f'# {titel}\n\n**Stand:** {stand}\n\n## Kurz\n\n- Kurzfassung von {titel}\n\n## Aufgaben\n\n'
+            f'| ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |\n|---|---|---|---|---|---|\n{zeilen}')
+
+
+def abgenommen(tag):
+    return f'abgenommen {inhaber.von()} am {tag}'
+
+
+def lege_plaene(repo, plaene_, aufgaben=()):
+    """`plaene_`: {Name: Text}; `aufgaben`: [(ID, Status)] werden an die Roadmap des Projekts gehängt (nicht committet, die Seiten lesen nur)."""
+    for name, text in plaene_.items():
+        (repo / 'plan' / f'{name}.md').write_text(text)
+    if aufgaben:
+        rm = repo / 'ROADMAP.md'
+        text = rm.read_text()
+        zeilen = ''.join(f'| {i} | Aufgabe {i} | Claude | {st} | 01.11. | |\n' for i, st in aufgaben)
+        rm.write_text(text.replace('| 0.1 | Projekt angelegt | Claude | erledigt | 29.10. | |\n', '| 0.1 | Projekt angelegt | Claude | erledigt | 29.10. | |\n' + zeilen))
+
+
+class GruppenTest(Basis):
+    """S14.3b: Gruppen „Zur Abnahme“, „In Arbeit“, „Erledigt“ mit Zuordnung, Reihenfolge und Projektfilter."""
+
+    def setUp(self):
+        super().setUp()
+        lege_plaene(self.repo, {
+            'wetter': plantext('Vorhaben Wetter · Claude · 30.10.2026', 'Entwurf', 'N1'),
+            'entwurf-alt': plantext('Alt · Claude · 01.11.2026', 'Entwurf', 'E1'),
+            'entwurf-neu': plantext('Neu · Claude · 05.11.2026', 'Entwurf', 'E2'),
+            'arbeit-a': plantext('Arbeit A · Claude · 01.11.2026', abgenommen('03.11.2026'), 'W1'),
+            'arbeit-b': plantext('Arbeit B · Claude · 01.11.2026', abgenommen('04.11.2026'), 'W2'),
+            'halb': plantext('Halb · Claude · 01.11.2026', abgenommen('02.11.2026'), 'H1', 'H2'),
+            'fertig-1': plantext('Fertig 1 · Claude · 01.11.2026', abgenommen('01.11.2026'), 'F1'),
+            'fertig-2': plantext('Fertig 2 · Claude · 01.11.2026', abgenommen('02.11.2026'), 'F2', 'F3'),
+            'kaputt': '# Kaputt\n\n**Stand:** Entwurf\n\n| ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium |\n|---|---|---|---|---|\n| X | nur zwei | a |\n',
+        }, [('W1', 'offen'), ('W2', 'in Arbeit'), ('H1', 'erledigt'), ('H2', 'Review'), ('F1', 'erledigt'), ('F2', 'erledigt'), ('F3', 'entfällt')])
+        self.html = self.client.get('/p/demo/plaene').text
+
+    def reihenfolge(self, gruppe, *namen):
+        """Alle `namen` stehen in dieser Reihenfolge in der Gruppe und sonst kein Plan."""
+        ab = self.html.index(f'aria-label="{gruppe}"')
+        ende = self.html.find('class="liste entscheidungen" aria-label="', ab)
+        inhalt = self.html[ab:ende if ende > 0 else len(self.html)]
+        gefunden = re.findall(r'href="/p/demo/plan/([^"/]+)"', inhalt)
+        self.assertEqual([n for i, n in enumerate(gefunden) if n not in gefunden[:i]], list(namen))
+
+    def test_zur_abnahme_entwuerfe_neueste_zuerst_mit_knopf(self):
+        kopf(self, self.html, 'Zur Abnahme', 3)
+        self.reihenfolge('Zur Abnahme', 'entwurf-neu', 'entwurf-alt', 'wetter')
+        f = felder(self.html, '/p/demo/plan/entwurf-neu/abnehmen')
+        self.assertEqual((f['zurueck'], f['gesehen']), ('plaene', plaene.pruefsumme((self.repo / 'plan' / 'entwurf-neu.md').read_text())))
+        self.assertIn('Kurzfassung von Neu', self.html)
+
+    def test_in_arbeit_abgenommen_mit_offenen_aufgaben_neueste_zuerst(self):
+        kopf(self, self.html, 'In Arbeit', 3)
+        self.reihenfolge('In Arbeit', 'arbeit-b', 'arbeit-a', 'halb')
+        self.assertNotIn('action="/p/demo/plan/arbeit-a/abnehmen"', self.html)
+        self.assertIn('2 von 2 Aufgaben in der Roadmap, 1 erledigt', self.html)
+
+    def test_erledigt_eingeklappt_unten_mit_anzahl_und_ohne_abgenommen_offene(self):
+        self.reihenfolge('Erledigt', 'fertig-2', 'fertig-1')
+        self.assertRegex(self.html, r'<details class="erledigt" id="erledigt"><summary>Erledigt \(2\)</summary>')
+        self.assertNotIn('<details class="erledigt" id="erledigt" open', self.html)
+        reihe = [self.html.index(f'aria-label="{g}"') for g in ('Zur Abnahme', 'In Arbeit', 'Nicht lesbar', 'Erledigt')]
+        self.assertEqual(reihe, sorted(reihe))
+        self.assertEqual(self.html.count('class="erledigt"'), 1)
+
+    def test_nicht_lesbarer_plan_steht_eigens_und_nicht_unter_zur_abnahme(self):
+        kopf(self, self.html, 'Nicht lesbar', 1)
+        self.reihenfolge('Nicht lesbar', 'kaputt')
+
+    def test_leere_gruppen_entfallen(self):
+        for n in ('wetter', 'entwurf-alt', 'entwurf-neu', 'arbeit-a', 'arbeit-b', 'halb', 'kaputt'):
+            (self.repo / 'plan' / f'{n}.md').unlink()
+        s = self.client.get('/p/demo/plaene').text
+        self.assertIn('Erledigt (2)', s)
+        for g in ('Zur Abnahme', 'In Arbeit', 'Nicht lesbar'):
+            self.assertNotIn(g, s)
+        for n in ('fertig-1', 'fertig-2'):
+            (self.repo / 'plan' / f'{n}.md').unlink()
+        s = self.client.get('/p/demo/plaene').text
+        self.assertIn('Keine Pläne.', s)
+        self.assertNotIn('Erledigt', s)
+
+    def test_gleiches_datum_nach_planname_absteigend_zahlen_als_zahlen(self):
+        for n in ('s9', 's10'):
+            (self.repo / 'plan' / f'{n}.md').write_text(plantext(f'{n} · Claude · 05.11.2026', 'Entwurf', 'Z1'))
+        (self.repo / 'plan' / 'entwurf-neu.md').unlink()
+        self.html = self.client.get('/p/demo/plaene').text
+        self.reihenfolge('Zur Abnahme', 's10', 's9', 'entwurf-alt', 'wetter')
+
+    def test_zurueck_ist_nur_aus_der_positivliste(self):
+        self.assertEqual(felder(self.client.get('/plaene').text, '/p/demo/plan/entwurf-neu/abnehmen')['zurueck'], 'plaene-alle')
+        r = self.client.post('/p/demo/plan/wetter/abnehmen', data={'gesehen': 'falsch', 'zurueck': 'https://böse.example/'})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn('href="/p/demo/plan/wetter"', r.text)
+
+
+class KnopfTest(Basis):
+    def test_abnehmen_per_knopf_geht_zurueck_auf_die_plaene_seite_des_projekts(self):
+        f = felder(self.client.get('/p/demo/plaene').text, '/p/demo/plan/wetter/abnehmen')
+        self.assertEqual(f['zurueck'], 'plaene')
+        r = self.client.post('/p/demo/plan/wetter/abnehmen', data=f)
+        self.assertEqual((r.status_code, r.headers['location']), (303, '/p/demo/plaene?meldung=plan-abgenommen'))
+        self.assertIn(abgenommen(ablauf.datum()), self.plan())
+        s = self.client.get(r.headers['location']).text
+        self.assertIn('Plan abgenommen', s)
+        kopf(self, s, 'In Arbeit', 1)  # Aufgaben noch nicht in der Roadmap: offen
+        self.assertNotIn('Zur Abnahme', s)
+
+    def test_von_der_globalen_seite_geht_es_auf_die_globale_seite_zurueck(self):
+        f = felder(self.client.get('/plaene').text, '/p/demo/plan/wetter/abnehmen')
+        self.assertEqual(f['zurueck'], 'plaene-alle')
+        r = self.client.post('/p/demo/plan/wetter/abnehmen', data=f)
+        self.assertEqual(r.headers['location'], '/plaene?meldung=plan-abgenommen')
+
+    def test_aenderung_wuenschen_von_der_projektseite(self):
+        r = self.client.post('/p/demo/plan/wetter/aenderung', data={'wunsch': 'bitte kürzer', 'zurueck': 'plaene'})
+        self.assertEqual(r.headers['location'], '/p/demo/plaene?meldung=rueckmeldung')
+        s = self.client.get('/p/demo/plaene').text
+        self.assertIn('Plan: Änderung gewünscht', s)
+        self.assertNotIn('action="/p/demo/plan/wetter/abnehmen"', s)
+        kopf(self, s, 'Zur Abnahme', 1)
+
+
+class ProjektFilterTest(Basis):
+    """S14.3b K1/K5: `/p/<projekt>/plaene` zeigt nur die Pläne dieses Projekts, `/plaene` alle."""
+
+    def setUp(self):
+        super().setUp()
+        self.zweit = self.tmp / 'rubview'
+        self.zweit.mkdir()
+        git(self.zweit, 'init', '-q', '-b', 'main')
+        (self.zweit / 'ROADMAP.md').write_text(ROADMAP.replace('# demo', '# rubview'))
+        (self.zweit / 'AGENTS.md').write_text('# Regeln\n')
+        (self.zweit / 'plan').mkdir()
+        (self.zweit / 'plan' / 'fremd.md').write_text(plantext('Fremd · Claude · 04.11.2026', 'Entwurf', 'R1'))
+        (self.zweit / 'devflow.toml').write_text('test = "true"\n')
+        git(self.zweit, 'add', '-A')
+        git(self.zweit, 'commit', '-q', '-m', 'start')
+        projekte.anmelden(self.zweit, 'rubview')
+
+    def test_projektseite_zeigt_nur_eigene_plaene(self):
+        s = self.client.get('/p/demo/plaene').text
+        self.assertIn('/p/demo/plan/wetter"', s)
+        self.assertNotIn('rubview', s.split('<main>')[1])
+        self.assertNotIn('/plan/fremd', s)
+        r = self.client.get('/p/rubview/plaene').text
+        self.assertIn('/p/rubview/plan/fremd"', r)
+        self.assertNotIn('/plan/wetter', r)
+        self.assertEqual(felder(r, '/p/rubview/plan/fremd/abnehmen')['zurueck'], 'plaene')
+
+    def test_globale_seite_zeigt_alle_gruppiert_nach_projekt(self):
+        s = self.client.get('/plaene').text
+        self.assertLess(s.index('/p/demo/plan/wetter"'), s.index('/p/rubview/plan/fremd"'))
+        self.assertIn('href="/p/rubview/plaene"', s)
+        self.assertEqual(s.count('<h3>Zur Abnahme (1)</h3>'), 2)
+
+    def test_unbekanntes_oder_ungueltiges_projekt_404(self):
+        for pfad in ('/p/gibtsnicht/plaene', '/p/..%2Fx/plaene', '/p/DEMO/plaene'):
+            self.assertEqual(self.client.get(pfad).status_code, 404, pfad)
+
+    def test_dieselben_rechte_wie_die_globale_seite(self):
+        fremd = TestClient(web.anwendung(), follow_redirects=False)
+        for pfad in ('/plaene', '/p/demo/plaene'):
+            self.assertIn(fremd.get(pfad).status_code, (401, 403), pfad)
+        self.assertEqual(self.client.get('/p/demo/plaene').status_code, 200)
+
+    def test_planseite_fuehrt_zurueck_auf_die_projektliste(self):
+        self.assertIn('href="/p/demo/plaene"', self.client.get('/p/demo/plan/wetter').text)
 
 
 class RoadmapTextTest(unittest.TestCase):

@@ -253,6 +253,11 @@ class MergeTorTest(Vorgaben):
 
 
 class StandTest(Vorgaben):
+    def vorgaben_ok(self):
+        """Das Vorgabentor lässt durch; danach greift nur, dass main fachlich weiter ist (S14.2: neues Review statt Merge)."""
+        with self.assertRaisesRegex(ablauf.NeuPruefen, 'fachlich geändert'):
+            ablauf._merge_pruefen(self.p, 'claude-a1', 'claude', 'A1')
+
     def test_lauf_haelt_den_bestaetigten_stand_fest(self):
         self.alle_vorgaben()
         self.bis_review()
@@ -273,23 +278,44 @@ class StandTest(Vorgaben):
         ablauf.mergen(self.p, 'A1')   # automatisch: Prüfung statt Merge, danach Merge
         self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
         self.ruhig()
-        self.assertEqual([l['art'] for l in laeufe.alle()][-3:], ['review', 'review', 'mergen'])
+        self.assertEqual([l['art'] for l in laeufe.alle()][-4:], ['review', 'vorbereiten', 'review', 'mergen'])  # main ist fachlich weiter: neu vorbereitet
         pruefung = self.aufrufe('codex')[-1]['argv'][-1]
         self.assertIn('Prüfung vor dem Merge', pruefung)
         self.assertIn('Daten bleiben im Land', pruefung)
         self.assertIn('MASTERPLAN.md: geändert', pruefung)
         self.assertNotIn('Prüfung vor dem Merge', self.aufrufe('codex')[0]['argv'][-1])
 
+    def test_geaenderter_masterplan_waehrend_der_mergelauf_wartet(self):
+        """S14.2 M1: Ein unterbrochener Mergelauf, fortgesetzt nach einer Änderung am Masterplan, geht zurück zu Vorbereitung und Prüfung."""
+        self.alle_vorgaben()
+        self.bis_review()
+        (self.repo / 'ROADMAP.md').write_text(self.roadmap() + '\nvon Hand\n')
+        l = ablauf.mergen(self.p, 'A1')
+        self.warten(lambda: laeufe.laden(l['id'])['zustand'] == 'fehler')
+        git(self.repo, 'checkout', '--', 'ROADMAP.md')
+        self.fest({'MASTERPLAN.md': MASTERPLAN + '- Neue Kernzusage: Daten bleiben im Land.\n'})
+        self.drehbuch(codex=[self.bestanden()])
+        ablauf.fortsetzen(l['id'])
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+        self.ruhig()
+        m = laeufe.laden(l['id'])
+        self.assertIn('MASTERPLAN.md: geändert', m['neu_pruefen'])
+        self.assertIsNone(m.get('merge'))
+        self.assertEqual([x['art'] for x in laeufe.alle()][-4:], ['mergen', 'vorbereiten', 'review', 'mergen'])
+        pruefung = self.aufrufe('codex')[-1]['argv'][-1]
+        self.assertIn('Prüfung vor dem Merge', pruefung)
+        self.assertIn('MASTERPLAN.md: geändert', pruefung)
+
     def test_neu_bestaetigte_entscheidung_loest_pruefung_aus_vorschlag_nicht(self):
         self.alle_vorgaben()
         self.bis_review()
         self.fest({'docs/entscheidungen/0005-neu.md': entscheidung('0005', 'Neu', 'vorgeschlagen')})
-        ablauf._merge_pruefen(self.p, 'claude-a1', 'claude', 'A1')   # Vorschlag bindet nicht: kein Fehler
+        self.vorgaben_ok()   # Vorschlag bindet nicht
         self.fest({'docs/entscheidungen/0005-neu.md': entscheidung('0005', 'Neu', 'bestätigt vom Inhaber')})
         with self.assertRaisesRegex(Fehler, '0005-neu.md: neu'):
             ablauf._merge_pruefen(self.p, 'claude-a1', 'claude', 'A1')
         self.fest({'docs/entscheidungen/0005-neu.md': entscheidung('0005', 'Neu', 'ersetzt durch 0006')})
-        ablauf._merge_pruefen(self.p, 'claude-a1', 'claude', 'A1')   # wieder wie beim Review
+        self.vorgaben_ok()   # wieder wie beim Review
 
     def test_zurueckgenommene_entscheidung_zaehlt_als_aenderung(self):
         self.alle_vorgaben()
@@ -304,7 +330,7 @@ class StandTest(Vorgaben):
         r.pop('grundlage_stand')
         laeufe.speichern(r)
         self.fest({'MASTERPLAN.md': MASTERPLAN})
-        ablauf._merge_pruefen(self.p, 'claude-a1', 'claude', 'A1')
+        self.vorgaben_ok()
 
 
 class TraumStandTest(Vorgaben):
@@ -354,7 +380,7 @@ class NachreviewTest(Vorgaben):
         self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
         self.ruhig()
         self.assertEqual([l['art'] for l in laeufe.alle()],
-                         ['entwickeln', 'test', 'review', 'nacharbeit', 'test', 'review', 'nacharbeit', 'test', 'review', 'mergen'])
+                         ['entwickeln', 'vorbereiten', 'review', 'nacharbeit', 'vorbereiten', 'review', 'nacharbeit', 'vorbereiten', 'review', 'mergen'])
         nachreview = self.aufrufe('codex')[1]['argv'][-1]
         self.assertIn('Nachprüfung', nachreview)
         self.assertIn('Ausnahme mit Vorrang', nachreview)

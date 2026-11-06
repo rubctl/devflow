@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Installiert devflow 2 auf einem Arbeitsserver (Ubuntu): Python 3.11 über uv, venv, Benutzerdienst fürs Dashboard.
 # Aufruf aus einem Checkout eines Releases (git clone --branch v2.N https://github.com/rubctl/devflow.git):
-#   ops/installieren.sh [--version v2.N] [--ohne-dienst] [--ohne-claude]
+#   ops/installieren.sh [--version v2.N] [--ohne-dienst] [--ohne-claude] [--mit-transkription]
 # Wiederholbar: prüft zuerst alle Voraussetzungen, ändert dann nur, was fehlt oder abweicht. Läuft ohne root; der eine
 # root-Schritt (loginctl enable-linger) wird am Ende genannt. Anleitung: docs/installation.md.
 #
 # Aufbau unter DEVFLOW2_HOME (Standard ~/.local/share/devflow2): versionen/<v2.N>/ (Code und .venv), aktiv → versionen/<v2.N>.
 # Neue Fassungen holt danach `python -m devflow2 aktualisieren`.
+# --mit-transkription (Schritt 6b) richtet faster-whisper in einer eigenen uv-Umgebung $DEVFLOW2_HOME/transkription/.venv ein (für ops/transkribieren.sh).
 # Schritt 6 richtet Claude Code ein (MCP-Server `devflow` im Scope user, Skills nach ~/.claude/skills/); beides zeigt auf `aktiv` und
 # überlebt damit jedes Update. Vorhandenes, anders Eingerichtetes wird gemeldet, nie überschrieben.
 set -euo pipefail
@@ -22,12 +23,14 @@ os_release=${DEVFLOW2_OS_RELEASE:-/etc/os-release}
 version=""
 dienst=1
 claude_einrichten=1
+transkription=0
 while [ $# -gt 0 ]; do
     case $1 in
         --version) version=${2:?--version braucht einen Wert}; shift 2 ;;
         --ohne-dienst) dienst=0; shift ;;
         --ohne-claude) claude_einrichten=0; shift ;;
-        *) echo "Aufruf: ops/installieren.sh [--version v2.N] [--ohne-dienst] [--ohne-claude]" >&2; exit 64 ;;
+        --mit-transkription) transkription=1; shift ;;
+        *) echo "Aufruf: ops/installieren.sh [--version v2.N] [--ohne-dienst] [--ohne-claude] [--mit-transkription]" >&2; exit 64 ;;
     esac
 done
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
@@ -207,7 +210,7 @@ if [ "$claude_einrichten" = 1 ]; then
             fi
         fi
         skills="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills"
-        for skill in planungssitzung neues-projekt; do
+        for skill in planungssitzung neues-projekt discovery; do
             quelle_skill="$aktiv/skills/$skill"
             [ -f "$quelle_skill/SKILL.md" ] || { echo "Claude: Skill $skill fehlt in $aktiv/skills, übersprungen" >&2; continue; }
             ziel_skill="$skills/$skill"
@@ -224,6 +227,26 @@ if [ "$claude_einrichten" = 1 ]; then
     fi
 fi
 
+# --- 6b. Transkription: faster-whisper in eigener Umgebung (nur mit --mit-transkription) ---------------------------------------
+tpython="$home/transkription/.venv/bin/python"
+transkription_fehler=""
+if [ "$transkription" = 1 ]; then
+    echo
+    if "$tpython" -c 'import faster_whisper' >/dev/null 2>&1; then
+        echo "Transkription: faster-whisper liegt schon in $home/transkription/.venv"
+    elif uv venv --clear --python "$(cat "$ziel/.python-version" 2>/dev/null || echo 3.11)" "$home/transkription/.venv" \
+            && uv pip install --python "$tpython" faster-whisper; then
+        echo "Transkription: faster-whisper eingerichtet in $home/transkription/.venv (das Modell wird beim ersten Audio einmalig geladen, siehe docs/discovery.md)"
+    else
+        rm -rf "$home/transkription/.venv"
+        transkription_fehler="faster-whisper ließ sich nicht installieren (Netz? Platz?). Alles andere ist fertig; zum Wiederholen: ops/installieren.sh --mit-transkription"
+        echo "Transkription: $transkription_fehler" >&2
+    fi
+elif ! "$tpython" -c 'import faster_whisper' >/dev/null 2>&1; then
+    echo
+    echo "Transkription von Audio ist nicht eingerichtet (faster-whisper fehlt). Bei Bedarf: ops/installieren.sh --mit-transkription"
+fi
+
 # --- 7. Was noch von Hand zu tun ist --------------------------------------------------------------------------------------
 echo
 echo "Fertig. Noch zu tun:"
@@ -236,3 +259,4 @@ fi
 echo "  2. Dashboard vom eigenen Rechner aus: Tunnel öffnen und im Browser http://localhost:$port aufrufen:"
 echo "       ssh -N -L $port:$adresse:$port $(id -un)@<dieser-server>"
 echo "  3. Projekte anmelden und Pläne abnehmen wie in docs/installation.md beschrieben."
+[ -z "$transkription_fehler" ] || exit 1

@@ -162,7 +162,7 @@ class SeitenTest(unittest.TestCase):
         self.assertIn('Kachel zeigt Temperatur', zeile)
         self.assertIn('Celsius oder Fahrenheit?', s.split('</span>Fragen')[1])
         ls = s.split('</span>Läufe')[1].split('<h2 ')[0]
-        self.assertIn('rc-kicker-num">(2)', s)
+        self.assertIn('rc-kicker-num">(3)', s)
         self.assertIn(f'href="/lauf/{self.ids["fertig"]}"', ls)
         self.assertIn('Urteil: Nacharbeit nötig', ls)
         self.assertIn('M1 (P2)', ls)

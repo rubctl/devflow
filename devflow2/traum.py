@@ -461,7 +461,7 @@ def _vorschlaege_text(t):
 
 
 def bericht_text(t):
-    zeilen = [f'# Traum {t["id"]}', '', bilanz(t) + '.', '',
+    zeilen = [f'# Traum {t["id"]}', '', f'**Kurz:** {bilanz(t)}.', '',
               f'- **Start:** {_uhr(t["start"])}', f'- **Ende:** {_uhr(t.get("ende"))}, {t.get("grund") or "läuft"}',
               f'- **Fensterende:** {_uhr(t["fenster_ende"])}',
               '- **Modellstarts:** ' + ', '.join(f'{NAMEN[m]} {n}' for m, n in t['zaehler'].items()),

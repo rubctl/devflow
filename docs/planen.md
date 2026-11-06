@@ -22,6 +22,7 @@ Der Inhaber startet sie selbst in Claude Code mit Opus, je Plan eine Sitzung (`/
 - **Rolle:** kritisch nachfragen, immer mit Empfehlung, Annahmen offenlegen; Vertagen ist erlaubt. Kein Code, keine Abnahme, keine Firmendaten in Suchanfragen.
 - **Prüfblickwinkel** je Sitzung: Fachlichkeit, Betrieb, Sicherheit, Daten, Kosten.
 - **Grundentscheidung:** Braucht das Vorhaben eine, entsteht der Vorschlag vor den Aufgaben (Status `vorgeschlagen`).
+- **Kurzfassung:** Jeder Entwurf hat unter der Stand-Zeile den Abschnitt `## Kurz` (höchstens drei Zeilen bzw. Punkte, Entscheidung für den Inhaber zuerst); `plan_entwurf` lehnt neue Entwürfe ohne ihn ab, ältere Pläne bleiben gültig ([Dashboard](dashboard.md#kurzfassung-s141)).
 - **Ergebnis:** Entwurf über `plan_entwurf` mit `**Stand:** Entwurf`, bei wichtigen Plänen Zweitmeinung von Sol. Kein Modell legt einen Plan als abgenommen an; die Zeile ändert der Inhaber.
 - **Kontingent:** Die Sitzung läuft aus dem Kontingent des Inhabers, nicht aus dem Budget des Selbstlaufs.
 

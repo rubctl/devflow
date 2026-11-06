@@ -148,3 +148,12 @@ def md(text, link=None):
                 i += 1
             out.append(t('p', inline(' '.join(absatz), link)))
     return Roh(''.join(out))
+
+
+def kurz_kasten(text, link=None):
+    """Kurzfassung eines Textes (S14.1) als hervorgehobener Kasten für die Seitenköpfe; None, wenn es nichts zu zeigen gibt.
+    `text` ist die Kurzfassung selbst (Markdown), etwa aus `kurz.aus_text` oder am Lauf gespeichert."""
+    z = str(text or '').strip()
+    if not z:
+        return None
+    return t('aside', t('strong', 'Kurz', class_='kurz-kopf'), md(z, link), class_='kurz', aria_label='Kurzfassung')

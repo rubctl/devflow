@@ -655,6 +655,7 @@ def bericht_pfad(ergebnis):
 def bericht_text(e):
     tag = datetime.date.fromisoformat(e['tag']).strftime('%d.%m.%Y')
     z = [f'# Pflege {e["projekt"]} · {tag}', '',
+         f'**Kurz:** {len(e["funde"])} Lücken, {len(e["veraltet"])} veraltete Pakete' + (f', {len(e["nicht_geprueft"])} Prüfungen nicht gelaufen' if e['nicht_geprueft'] else '') + '.', '',
          f'Stand: Commit `{e["commit"]}`, geprüft in einer Kopie. Werkzeuge fragen öffentliche Datenbanken (OSV, PyPI, npm) nur lesend ab.', '']
     z += ['## Zusammenfassung', '']
     nach = {s: sum(f['schwere'] == s for f in e['funde']) for s in SCHWEREN}

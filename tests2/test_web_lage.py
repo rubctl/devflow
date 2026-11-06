@@ -1,5 +1,6 @@
 """Übersicht (S4.3): Leitstand mit vier Blöcken, Kontingentbalken, Navigation, Zuordnung Rohwert → Anzeige, Grün nur für Abgeschlossenes."""
 import logging
+import os
 import re
 import time
 import unittest
@@ -9,9 +10,11 @@ import warnings
 warnings.filterwarnings('ignore', 'Using `httpx`')
 from starlette.testclient import TestClient  # noqa: E402
 
-from devflow2 import laeufe, roadmap, web, web_html  # noqa: E402
+from devflow2 import inhaber, laeufe, roadmap, vorschlag, web, web_html  # noqa: E402
+from devflow2.projekte import Projekt  # noqa: E402
 from devflow2.web_kontingent import balken  # noqa: E402
-from hilfen import Fall  # noqa: E402
+import test_vorschlag  # noqa: E402
+from hilfen import Fall, git  # noqa: E402
 from web_daten import aufbauen  # noqa: E402
 
 LOGIN = {'Tailscale-User-Login': 'inhaber@github'}
@@ -261,11 +264,11 @@ class LeitstandTest(unittest.TestCase):
         self.assertIn('d.text, d.art', js)
         self.assertNotIn('laeuft:', js)
 
-    def test_braucht_dich_je_projekt_gruppiert(self):
+    def test_braucht_dich_ist_eine_liste_mit_projektname_je_zeile(self):
         s = self.client.get('/').text.split('id="braucht-dich"')[1].split('id="laeuft"')[0]
-        self.assertEqual(re.findall(r'<li class="gruppe"><h3>([^<]+)</h3>', s), ['demo'])
         self.assertGreaterEqual(s.count('class="eintrag"'), 2)
-        self.assertNotIn('<span class="leise">demo</span>', s)  # Projektname steht nur in der Zwischenzeile
+        self.assertNotIn('class="gruppe"', s)
+        self.assertRegex(s, r'<summary>.*?<span class="leise">demo</span>')  # S14.3: flache Liste, das Projekt steht in der Zeile
 
     def test_uebersicht_ohne_erledigtes_und_alte_laeufe(self):
         s = self.client.get('/').text.split('<main>')[1]
@@ -307,9 +310,12 @@ class LeerTest(Fall):
         eingang.anlegen(self.p, 'Dunkles Thema <b>prüfen</b>')
         s = self.client.get('/').text.split('id="laeuft"')[0]
         self.assertIn('Plan zur Abnahme', s)
-        self.assertIn('href="/p/demo/plan/wetter#abnehmen"', s)
+        self.assertIn('action="/p/demo/plan/wetter/abnehmen"', s)
+        self.assertIn('href="/p/demo/plan/wetter"', s)  # ganzen Plan lesen
         self.assertIn('neue Idee', s)
         self.assertIn('href="/p/demo#ideen"', s)
+        self.assertLess(s.index('<summary>Zur Info (1)</summary>'), s.index('neue Idee'))  # reine Information steht eingeklappt unter „Zur Info“
+        self.assertIn('(1)</span></h2>', s)  # die Anzahl zählt die Info nicht
         self.assertIn('Dunkles Thema &lt;b&gt;prüfen&lt;/b&gt;', s)
         self.assertNotIn('<b>prüfen', s)
         self.assertNotIn('Nichts offen', s)
@@ -322,7 +328,7 @@ class LeerTest(Fall):
         s = self.client.get('/').text.split('id="laeuft"')[0]
         self.assertEqual(s.count('class="eintrag"'), 8)
         self.assertIn('<summary>3 weitere</summary>', s)
-        self.assertEqual(s.split('<details>')[0].count('class="eintrag"'), 5)
+        self.assertEqual(s.split('<summary>3 weitere</summary>')[0].count('class="eintrag"'), 5)
 
     def test_defektes_projekt_bricht_die_seite_nicht(self):
         (self.repo / 'ROADMAP.md').write_text('kaputt\n| ID | x |\n|---|---|\n| 1 | 2 |\n')
@@ -336,6 +342,319 @@ class LeerTest(Fall):
         laeufe.speichern({'id': 'd1', 'projekt': 'demo', 'art': 'deploy', 'modell': 'shell', 'aufgabe': 'A1', 'zustand': 'fertig', 'angelegt': time.time(), 'ende': time.time()})
         s = self.client.get('/').text.split('id="projekte"')[1].split('id="selbstlauf"')[0]
         self.assertRegex(s, r'Letzter Deploy: <span class="rc-status rc-status-ok"[^>]*><span[^>]*>●</span>fertig')
+
+
+HERKUNFT = {**LOGIN, 'Origin': 'http://testserver'}
+
+
+def felder(html, aktion):
+    """Die Formularfelder (versteckt) des Formulars mit dieser Aktion, so wie der Browser sie senden würde."""
+    form = re.search(r'<form method="post" action="' + re.escape(aktion) + r'"[^>]*>(.*?)</form>', html, re.S)
+    assert form, f'kein Formular {aktion}'
+    return dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', form.group(1)))
+
+
+class EntscheidungBasis(Fall):
+    """Die Übersicht als Entscheidungsliste (S14.3): Knöpfe senden an dieselben Routen wie die Formulare, gebunden an den angezeigten Stand."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(web.anwendung(), headers=HERKUNFT, follow_redirects=False)
+
+    def start(self):
+        return self.client.get('/').text.split('id="braucht-dich"')[1].split('id="laeuft"')[0]
+
+    def knopf(self, aktion, **mehr):
+        """Klick: genau die Felder des angezeigten Formulars."""
+        return self.client.post(aktion, data={**felder(self.start(), aktion), **mehr})
+
+
+class PlanKnopfTest(EntscheidungBasis):
+    plan_text = ENTWURF
+
+    def test_abnehmen_per_knopf_ist_dieselbe_planzeile_wie_ueber_die_planseite(self):
+        kopie = ENTWURF.replace('Vorhaben Wetter', 'Vorhaben Zwei')
+        (self.repo / 'plan' / 'zwei.md').write_text(kopie)
+        git(self.repo, 'add', 'plan/zwei.md')
+        git(self.repo, 'commit', '-q', '-m', 'plan: zwei')
+        s = self.start()
+        self.assertEqual(s.count('>Abnehmen</button>'), 2)
+        f = felder(s, '/p/demo/plan/wetter/abnehmen')
+        self.assertEqual((f['stufe.A1'], f['zurueck']), ('', 'start'))
+        r = self.knopf('/p/demo/plan/wetter/abnehmen')
+        self.assertEqual((r.status_code, r.headers['location']), (303, '/?meldung=plan-abgenommen#braucht-dich'))
+        # dieselbe Aufgabe über das Formular der Planseite (Felder `stufe.<ID>` und `gesehen`, ohne `zurueck`)
+        seite = self.client.get('/p/demo/plan/zwei').text
+        gesehen = re.search(r'name="gesehen" value="([^"]+)"', seite).group(1)
+        r = self.client.post('/p/demo/plan/zwei/abnehmen', data={'stufe.A1': '', 'gesehen': gesehen})
+        self.assertEqual(r.headers['location'], '/p/demo/plan/zwei?meldung=plan-abgenommen')
+        a, b = [(self.repo / 'plan' / n).read_text() for n in ('wetter.md', 'zwei.md')]
+        self.assertEqual(a.replace('Vorhaben Wetter', 'X'), b.replace('Vorhaben Zwei', 'X'))
+        self.assertRegex(a, r'\*\*Stand:\*\* abgenommen')
+        self.assertNotIn('action="/p/demo/plan/wetter/abnehmen"', self.start())
+
+    def test_stufen_stammen_aus_der_plantabelle(self):
+        text = ENTWURF.replace('| A1 | Wetter-Kachel | claude | `app/wetter.py` | Kachel zeigt Temperatur |',
+                               '| A1 | Wetter-Kachel | claude | `app/wetter.py` | Kachel zeigt Temperatur | schwer |').replace('Abnahmekriterium |\n|---|---|---|---|---|',
+                                                                                                                 'Abnahmekriterium | Stufe |\n|---|---|---|---|---|---|')
+        (self.repo / 'plan' / 'wetter.md').write_text(text)
+        git(self.repo, 'commit', '-qam', 'plan: Stufe')
+        s = self.start()
+        self.assertEqual(felder(s, '/p/demo/plan/wetter/abnehmen')['stufe.A1'], 'schwer')
+        self.assertIn('A1 schwer', s)  # die Beschriftung nennt die Stufen
+        self.knopf('/p/demo/plan/wetter/abnehmen')
+        self.assertIn('schwer', (self.repo / 'plan' / 'wetter.md').read_text().split('abgenommen')[1])
+
+    def test_veralteter_plan_wird_abgelehnt(self):
+        s = self.start()
+        f = felder(s, '/p/demo/plan/wetter/abnehmen')
+        (self.repo / 'plan' / 'wetter.md').write_text(ENTWURF + '\nNeuer Absatz.\n')
+        git(self.repo, 'commit', '-qam', 'plan: geändert')
+        r = self.client.post('/p/demo/plan/wetter/abnehmen', data=f)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn('hat sich geändert', r.text)
+        self.assertNotIn('abgenommen', (self.repo / 'plan' / 'wetter.md').read_text().split('**Stand:**')[1].split('\n')[0])
+
+    def test_herkunft_wird_wie_bei_den_formularen_geprueft(self):
+        f = felder(self.start(), '/p/demo/plan/wetter/abnehmen')
+        r = TestClient(web.anwendung(), headers=LOGIN, follow_redirects=False).post('/p/demo/plan/wetter/abnehmen', data=f)
+        self.assertEqual(r.status_code, 403)
+
+    def test_zurueck_ist_kein_frei_waehlbares_ziel(self):
+        f = felder(self.start(), '/p/demo/plan/wetter/abnehmen')
+        r = self.client.post('/p/demo/plan/wetter/abnehmen', data={**f, 'zurueck': 'https://boese.example/'})
+        self.assertEqual(r.headers['location'], '/p/demo/plan/wetter?meldung=plan-abgenommen')
+
+    def test_aenderungswunsch_steht_in_den_details_und_bleibt_auf_der_uebersicht(self):
+        r = self.client.post('/p/demo/plan/wetter/aenderung', data={'wunsch': 'Mehr Tests', 'zurueck': 'start'})
+        self.assertEqual(r.headers['location'], '/?meldung=rueckmeldung#braucht-dich')
+        s = self.client.get('/').text
+        self.assertNotIn('action="/p/demo/plan/wetter/abnehmen"', s)  # mit offenem Wunsch kein Ein-Klick-Abnehmen
+        self.assertIn('Plan: Änderung gewünscht', s.split('Zur Info')[1])
+
+
+class EmpfehlungTest(unittest.TestCase):
+    def frage(self, optionen, empfehlung):
+        from devflow2 import roadmap as rm
+        text, nr = rm.frage(f'## Offene Fragen {inhaber.an_formen()[0]}\n\n_Keine._\n', '06.11.', 'Welche?', optionen, empfehlung, 'A1')
+        return rm.fragen(text)[0]
+
+    def test_eindeutig_nur_bei_genau_einer_option(self):
+        from devflow2 import entscheidung as e
+        o = ['Celsius, weil metrisch', 'Fahrenheit']
+        for empf, soll in [('Option 1', 1), ('Option 2', 2), ('2.', 2), ('Option 2: Fahrenheit', 2), ('Option 1: celsius', 1), ('1. Celsius', 1), ('2)', 2),
+                           ('Fahrenheit', 2), ('fahrenheit.', 2)]:
+            self.assertEqual((e.empfehlung(self.frage(o, empf)) or (None,))[0], soll, empf)
+        for empf in ('keine', '', 'Option 3', 'Option 1 oder Option 2', 'Option 1, später 2. Schritt', 'Erst Review, dann Merge', '2 Wochen warten', 'Celsius oder Fahrenheit',
+                     'Option 1 und 2 kombinieren', 'Option 1/2', 'Option 1 + 2', '1. und 2.', 'Option 1 und beide', 'Option 1 sowie Fahrenheit', 'Option 1, kombiniert',
+                     'Option 1, zusätzlich Dokumentation ergänzen.', 'Option 2, außerdem Review', 'Option 1, dazu eine Doku',
+                     'Option 1 (zusätzlich Dokumentation ergänzen)', 'Option 1 (Empfehlung)', 'Option 2: weil gewohnt', 'Option 1, weil Tests fehlen; zusätzlich Doku',
+                     'Option 2, denn schneller', 'Option 2 da gewohnt'):
+            self.assertIsNone(e.empfehlung(self.frage(o, empf)), empf)
+        self.assertIsNone(e.empfehlung(self.frage([], 'Option 1')))  # keine Optionen vorgegeben
+        self.assertIsNone(e.empfehlung(self.frage(['a', 'a'], 'a')))  # Text zweimal: nicht eindeutig
+
+    def test_mehrzeilige_empfehlung(self):
+        from devflow2 import entscheidung as e
+        self.assertEqual(e.empfehlung(self.frage(['A', 'B'], 'Option 2\n'))[0], 2)
+        self.assertIsNone(e.empfehlung(self.frage(['A', 'B'], 'Option 2\nweil schneller')))
+
+
+class FrageKnopfTest(EntscheidungBasis):
+    plan_text = ENTWURF
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / 'plan' / 'wetter.md').unlink()
+        git(self.repo, 'commit', '-qam', 'ohne Plan')
+
+    def frage(self, empfehlung):
+        from devflow2 import ablauf
+        ablauf.frage_stellen(self.p, 'Celsius oder Fahrenheit?', ['Celsius', 'Fahrenheit'], empfehlung)
+
+    def test_eindeutige_empfehlung_hat_einen_knopf_und_traegt_die_option_ein(self):
+        self.frage('Option 1')
+        s = self.start()
+        self.assertIn('Empfehlung annehmen', s)
+        r = self.knopf('/p/demo/frage/1/empfehlung')
+        self.assertEqual((r.status_code, r.headers['location']), (303, '/?meldung=empfehlung#braucht-dich'))
+        self.assertIn('Empfehlung angenommen: Option 1, Celsius', self.roadmap())
+        self.assertIn('Empfehlung angenommen', self.client.get(r.headers['location']).text)
+        self.assertEqual(self.client.get('/').text.count('Empfehlung annehmen'), 0)
+
+    def test_kombinierte_empfehlung_hat_keinen_knopf_und_traegt_nichts_ein(self):
+        self.keine_empfehlung_per_knopf(['Celsius', 'Fahrenheit'], 'Option 1 und 2 kombinieren')
+
+    def keine_empfehlung_per_knopf(self, optionen, empfehlung):
+        """Kein Knopf, und selbst ein POST mit der gültigen angezeigten Prüfsumme trägt nichts ein."""
+        from devflow2 import ablauf, entscheidung as e, roadmap as rm
+        ablauf.frage_stellen(self.p, 'Was fehlt?', optionen, empfehlung)
+        self.assertNotIn('Empfehlung annehmen', self.start())
+        gesehen = e.frage_stand(rm.fragen(self.roadmap())[0])
+        r = self.client.post('/p/demo/frage/1/empfehlung', data={'gesehen': gesehen})
+        self.assertEqual(r.status_code, 409)
+        self.assertNotIn('Empfehlung angenommen', self.roadmap())
+
+    def test_empfehlung_mit_zusatz_in_klammer_hat_keinen_knopf_und_traegt_nichts_ein(self):
+        self.keine_empfehlung_per_knopf(['Tests ergänzen', 'Dokumentation ergänzen'], 'Option 1 (zusätzlich Dokumentation ergänzen)')
+
+    def test_empfehlung_mit_begruendung_und_zusatz_hat_keinen_knopf_und_traegt_nichts_ein(self):
+        self.keine_empfehlung_per_knopf(['Tests ergänzen', 'Dokumentation ergänzen'], 'Option 1, weil Tests fehlen; zusätzlich Dokumentation ergänzen.')
+
+    def test_ohne_eindeutige_empfehlung_antworten_in_den_details(self):
+        self.frage('Erst klären, dann entscheiden')
+        s = self.start()
+        self.assertNotIn('Empfehlung annehmen', s)
+        self.assertIn('data-antworten', s)
+        self.assertIn('>Antworten</a>', s)
+        self.assertIn('action="/p/demo/frage/1/antwort"', s)  # das Formular steckt in den Details
+        r = self.client.post('/p/demo/frage/1/empfehlung', data={'gesehen': 'x'})
+        self.assertEqual(r.status_code, 409)  # auch ein gebastelter Aufruf trägt keine Antwort ein
+        self.assertNotIn('Empfehlung angenommen', self.roadmap())
+
+    def test_geaenderte_empfehlung_wird_abgelehnt(self):
+        self.frage('Option 1')
+        f = felder(self.start(), '/p/demo/frage/1/empfehlung')
+        (self.repo / 'ROADMAP.md').write_text(self.roadmap().replace('**Empfehlung:** Option 1', '**Empfehlung:** Option 2'))
+        git(self.repo, 'commit', '-qam', 'Empfehlung geändert')
+        r = self.client.post('/p/demo/frage/1/empfehlung', data=f)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn('hat sich geändert', r.text)
+        self.assertNotIn('Empfehlung angenommen', self.roadmap())
+
+    def test_doppelklick_antwortet_nur_einmal(self):
+        self.frage('Option 2')
+        f = felder(self.start(), '/p/demo/frage/1/empfehlung')
+        for _ in range(2):
+            r = self.client.post('/p/demo/frage/1/empfehlung', data=f)
+            self.assertEqual(r.status_code, 303)
+        self.assertEqual(self.roadmap().count('Empfehlung angenommen: Option 2, Fahrenheit'), 1)
+        self.assertEqual(r.headers['location'], '/?meldung=schon#braucht-dich')
+
+    def test_ohne_origin_abgelehnt(self):
+        self.frage('Option 1')
+        f = felder(self.start(), '/p/demo/frage/1/empfehlung')
+        self.assertEqual(TestClient(web.anwendung(), headers=LOGIN, follow_redirects=False).post('/p/demo/frage/1/empfehlung', data=f).status_code, 403)
+
+
+class LaufKnopfTest(EntscheidungBasis):
+    plan_text = ENTWURF
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / 'plan' / 'wetter.md').unlink()
+        git(self.repo, 'commit', '-qam', 'ohne Plan')
+        from devflow2 import ablauf
+        ablauf.aufgabe_anlegen(self.p, 'A1', 'Wetter')
+        self.lauf = {'id': 'l1', 'projekt': 'demo', 'art': 'entwickeln', 'modell': 'claude', 'aufgabe': 'A1', 'zustand': 'fehler', 'angelegt': time.time(),
+                     'ende': time.time(), 'fehler': 'kaputt'}
+        laeufe.speichern(self.lauf)
+
+    def test_fortsetzen_per_knopf(self):
+        self.assertIn('Lauf fehlgeschlagen', self.start())
+        f = felder(self.start(), '/lauf/l1/fortsetzen')
+        with unittest.mock.patch('devflow2.ablauf.fortsetzen') as fort:
+            r = self.client.post('/lauf/l1/fortsetzen', data=f)
+        self.assertEqual((r.status_code, r.headers['location']), (303, '/?meldung=fortgesetzt#braucht-dich'))
+        fort.assert_called_once_with('l1', 'dashboard')
+
+    def test_veralteter_lauf_wird_abgelehnt(self):
+        f = felder(self.start(), '/lauf/l1/fortsetzen')
+        laeufe.speichern({**self.lauf, 'fehler': 'etwas anderes'})
+        with unittest.mock.patch('devflow2.ablauf.fortsetzen') as fort:
+            r = self.client.post('/lauf/l1/fortsetzen', data=f)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn('hat sich geändert', r.text)
+        fort.assert_not_called()
+
+    def test_ohne_gesehen_gilt_die_alte_seite_weiter(self):
+        with unittest.mock.patch('devflow2.ablauf.fortsetzen') as fort:
+            self.assertEqual(self.client.post('/lauf/l1/fortsetzen', data={}).headers['location'], '/lauf/l1?meldung=fortgesetzt')
+        fort.assert_called_once()
+
+    def test_kein_knopf_bei_offener_frage_traum_und_halt(self):
+        from devflow2 import ablauf
+        ablauf.frage_stellen(self.p, 'Weiter?', ['ja', 'nein'], 'keine Ahnung', 'A1')
+        s = self.start()
+        self.assertNotIn('/lauf/l1/fortsetzen', s)
+        self.assertIn('Fortsetzen ist gerade nicht möglich: Wartet auf Antwort', s)
+        ablauf.antwort_eintragen(self.p, 'F1', 'ja')
+        self.assertIn('/lauf/l1/fortsetzen', self.start())
+        laeufe.speichern({**self.lauf, 'traum': 'x'})
+        self.assertNotIn('/lauf/l1/fortsetzen', self.start())
+
+    def test_halt_ist_ein_klaerungseintrag_oben_und_sperrt_fortsetzen(self):
+        from devflow2 import ablauf
+        ablauf.anhalten('alles', 'dashboard')
+        s = self.start()
+        self.assertLess(s.index('devflow ist angehalten'), s.index('Lauf fehlgeschlagen'))
+        self.assertIn('action="/alles/fortsetzen"', s)
+        self.assertNotIn('/lauf/l1/fortsetzen', s)
+        self.assertEqual(self.client.post('/lauf/l1/fortsetzen', data={}).status_code, 409)  # auch der gebastelte Aufruf
+
+    def test_login_problem_und_blockade_stehen_oben(self):
+        from devflow2 import ablauf
+        ablauf.aufgabe_anlegen(self.p, 'A2', 'Zweite')
+        ablauf.status_setzen(self.p, 'A2', 'blockiert', details='Wartet auf Zugang')
+        laeufe.speichern({**self.lauf, 'login': 'claude'})
+        s = self.start()
+        klaeren = s.split('class="liste entscheidungen klaerung"')[1].split('</ul>')[0]
+        self.assertIn('Wartet auf Zugang', klaeren)
+        self.assertIn('Anmeldung von claude abgelaufen', klaeren)
+        self.assertIn('/lauf/l1/fortsetzen', klaeren)
+
+
+class VorschlagKnopfTest(test_vorschlag.Hilfe):
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(web.anwendung(), headers=HERKUNFT, follow_redirects=False)
+
+    def start(self):
+        return self.client.get('/').text.split('id="braucht-dich"')[1].split('id="laeuft"')[0]
+
+    def test_uebernehmen_per_knopf_bindet_an_den_stand(self):
+        v = self.bereit()
+        s = self.start()
+        self.assertIn('>Übernehmen</button>', s)
+        f = felder(s, f'/traum/vorschlag/{v["id"]}/uebernehmen')
+        self.assertEqual(f['gesehen'], self.kopf())
+        r = self.client.post(f'/traum/vorschlag/{v["id"]}/uebernehmen', data=f)
+        self.assertEqual((r.status_code, r.headers['location']), (303, '/?meldung=vorschlag-merge#braucht-dich'))
+        self.assertEqual(vorschlag.laden(v['id'])['zustand'], 'uebernommen')
+        self.assertEqual(vorschlag.laden(v['id'])['freigabe']['commit'], f['gesehen'])
+        self.assertNotIn('>Übernehmen</button>', self.start())
+
+    def test_neuer_stand_wird_abgelehnt(self):
+        v = self.bereit()
+        f = felder(self.start(), f'/traum/vorschlag/{v["id"]}/uebernehmen')
+        git(v['worktree'], 'commit', '-q', '--allow-empty', '-m', 'noch eine Änderung')
+        r = self.client.post(f'/traum/vorschlag/{v["id"]}/uebernehmen', data=f)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn('nicht mehr auf dem angezeigten Stand', r.text)
+        self.assertEqual(vorschlag.laden(v['id'])['zustand'], 'offen')
+
+    def test_verwerfen_steht_in_den_details_mit_rueckfrage(self):
+        v = self.bereit()
+        s = self.start()
+        self.assertRegex(s, r'<form method="post" action="/traum/vorschlag/' + v['id'] + r'/verwerfen"[^>]*data-bestaetigen=')
+        f = felder(s, f'/traum/vorschlag/{v["id"]}/verwerfen')
+        self.assertEqual(f['gesehen'], vorschlag.kopf(Projekt('demo'), v))
+        r = self.client.post(f'/traum/vorschlag/{v["id"]}/verwerfen', data=f)
+        self.assertEqual(r.headers['location'], '/?meldung=vorschlag-verworfen#braucht-dich')
+        self.assertEqual(vorschlag.laden(v['id'])['zustand'], 'verworfen')
+
+    def test_verwerfen_mit_neuem_stand_wird_abgelehnt(self):
+        v = self.bereit()
+        f = felder(self.start(), f'/traum/vorschlag/{v["id"]}/verwerfen')
+        git(v['worktree'], 'commit', '-q', '--allow-empty', '-m', 'noch eine Änderung')
+        r = self.client.post(f'/traum/vorschlag/{v["id"]}/verwerfen', data=f)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn('nicht mehr auf dem angezeigten Stand', r.text)
+        self.assertEqual(vorschlag.laden(v['id'])['zustand'], 'offen')
+        self.assertTrue(os.path.isdir(v['worktree']))
+        r = self.client.post(f'/traum/vorschlag/{v["id"]}/verwerfen', data={'zurueck': 'start'})  # altes Formular ohne Stand
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(vorschlag.laden(v['id'])['zustand'], 'offen')
 
 
 if __name__ == '__main__':

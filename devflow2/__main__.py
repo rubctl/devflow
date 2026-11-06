@@ -1,4 +1,4 @@
-"""Aufruf: python -m devflow2 mcp [steuerung|planung|ideen] | web | lauf <id> | lage | anmelden <pfad> [name] | instanz [einstellung] | aktualisieren [--version v2.N] [--zurueck] | format [migrieren]"""
+"""Aufruf: python -m devflow2 mcp [steuerung|planung|ideen] | web | lauf <id> | lage | anmelden <pfad> [name] | instanz [einstellung] | aktualisieren [--version v2.N] [--zurueck] | format [migrieren] | discovery pruefen|stand [<pfad>]"""
 import json
 import sys
 
@@ -16,6 +16,9 @@ def main(argv):
         from . import format as zustandsformat
         print(zustandsformat.bereit() or 'Zustand ist im Format dieser Fassung' if argv[1:] == ['migrieren'] else zustandsformat.FORMAT)
         return
+    if argv[:1] == ['discovery']:
+        from .discovery import main as discovery_main
+        raise SystemExit(discovery_main(argv[1:]))  # Exitcode ≠ 0, wenn die Prüfung Fehler meldet
     if argv[:1] == ['aktualisieren']:
         from .aktualisieren import main as aktualisieren_main
         return aktualisieren_main(argv[1:])

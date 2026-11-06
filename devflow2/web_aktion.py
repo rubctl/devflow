@@ -16,7 +16,7 @@ from starlette.exceptions import HTTPException
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from starlette.routing import Route
 
-from . import Fehler, ablauf, eingang, ereignis, instanz, laeufe, plaene, roadmap, selbstlauf
+from . import Fehler, ablauf, eingang, entscheidung, ereignis, instanz, laeufe, plaene, roadmap, selbstlauf
 from . import inhaber as _i
 from . import projekte
 from .projekte import Projekt
@@ -31,6 +31,7 @@ SPERRE = threading.Lock()  # ein Dienstprozess: Prüfen und Handeln laufen nache
 
 MELDUNG = {
     'antwort': 'Antwort ist in der Roadmap eingetragen.',
+    'empfehlung': 'Empfehlung angenommen: Sie steht als deine Antwort in der Roadmap.',
     'schon': 'Diese Frage war schon beantwortet; es wurde nichts geändert.',
     'angehalten': 'Lauf angehalten. Mit „Fortsetzen“ geht er in derselben Sitzung weiter.',
     'nicht-aktiv': 'Der Lauf war schon nicht mehr aktiv; es wurde nichts geändert.',
@@ -105,8 +106,8 @@ def meldung(request):
     return t('p', text, class_='hinweis', role='status') if text else None
 
 
-def _knopf(url, text, *felder, bestaetigen=None, klasse=None):
-    return t('form', *felder, t('button', text, type='submit', class_='rc-btn' + (f' {klasse}' if klasse else '')), method='post', action=url, class_='aktion',
+def _knopf(url, text, *felder, bestaetigen=None, klasse=None, titel=None):
+    return t('form', *felder, t('button', text, type='submit', class_='rc-btn' + (f' {klasse}' if klasse else ''), title=titel), method='post', action=url, class_='aktion',
              data_bestaetigen=bestaetigen)
 
 
@@ -183,6 +184,17 @@ async def _formular(request):
     return {k: v[0] for k, v in parse_qs(roh.decode('utf-8', 'replace'), keep_blank_values=True).items()}
 
 
+def ziel_nach(form, standard, projekt=None):
+    """Wohin es nach einer Handlung geht: `zurueck=start` (Knöpfe in „Braucht dich“) heißt Übersicht, `plaene` die Pläne-Seite des Projekts
+    `projekt`, `plaene-alle` die globale Pläne-Seite, sonst `standard`. Nie ein frei wählbares Ziel."""
+    zurueck = form.get('zurueck')
+    if zurueck == 'start':
+        return '/#braucht-dich'
+    if zurueck == 'plaene' and projekt:
+        return f'/p/{quote(projekt)}/plaene'
+    return '/plaene' if zurueck == 'plaene-alle' else standard
+
+
 def _weiter(ziel, code):
     pfad, _, anker = ziel.partition('#')
     return RedirectResponse(f'{pfad}?meldung={code}' + (f'#{anker}' if anker else ''), status_code=303)
@@ -237,8 +249,9 @@ def _beantworten(p, nr, text):
 async def frage_beantworten(request):
     p = _projekt(request.path_params['projekt'])
     nr = request.path_params['nr']
-    zurueck = f'/p/{quote(p.name)}#fragen'
-    text = roadmap.eine_zeile((await _formular(request)).get('antwort', ''))
+    form = await _formular(request)
+    zurueck = ziel_nach(form, f'/p/{quote(p.name)}#fragen')
+    text = roadmap.eine_zeile(form.get('antwort', ''))
     if not text:
         return _nicht_moeglich('Die Antwort ist leer.', zurueck, 400)
     if len(text) > MAX_ANTWORT:
@@ -251,6 +264,35 @@ async def frage_beantworten(request):
     return _weiter(_frage_ziel(p, bezug), code)
 
 
+def _empfehlung_annehmen(p, nr, gesehen):
+    """(Code, Bezug). Trägt die eindeutige Empfehlung als Antwort ein, gebunden an den angezeigten Frageblock. Schon beantwortet: nichts ändern."""
+    with SPERRE:
+        fragen = roadmap.fragen(p.roadmap.read_text(encoding='utf-8'), nur_offen=False)
+        frage = next((f for f in fragen if f['nr'] == nr), None)
+        if frage is None:
+            raise Fehler(f'Frage F{nr} gibt es nicht')
+        if not frage['offen']:
+            return 'schon', frage['bezug']
+        if entscheidung.frage_stand(frage) != gesehen:
+            raise Fehler(f'F{nr} hat sich geändert (Frage, Optionen oder Empfehlung), seit du die Übersicht geöffnet hast; bitte neu laden und prüfen')
+        e = entscheidung.empfehlung(frage)
+        if not e:
+            raise Fehler(f'F{nr} hat keine eindeutige Empfehlung; bitte selbst antworten')
+        return 'empfehlung', ablauf.antwort_eintragen(p, nr, entscheidung.antwort_text(*e), ZUGANG)['bezug']
+
+
+async def frage_empfehlung(request):
+    p = _projekt(request.path_params['projekt'])
+    nr = request.path_params['nr']
+    form = await _formular(request)
+    zurueck = ziel_nach(form, f'/p/{quote(p.name)}#fragen')
+    try:
+        code, bezug = await run_in_threadpool(_empfehlung_annehmen, p, nr, form.get('gesehen', ''))
+    except Fehler as err:
+        return _nicht_moeglich(str(err), zurueck, 404 if 'gibt es nicht' in str(err) else 409)
+    return _weiter(ziel_nach(form, _frage_ziel(p, bezug)), code)
+
+
 def _lauf_anhalten(lid):
     with SPERRE:
         if _lauf(lid)['zustand'] not in laeufe.AKTIV:
@@ -259,21 +301,25 @@ def _lauf_anhalten(lid):
         return 'angehalten'
 
 
-def _lauf_fortsetzen(lid):
+def _lauf_fortsetzen(lid, gesehen=None):
+    """`gesehen` (nur von den Knöpfen in „Braucht dich“): Stand des angezeigten Laufs; hat er sich geändert, wird abgelehnt."""
     with SPERRE:
-        if _lauf(lid)['zustand'] in laeufe.AKTIV:
+        l = _lauf(lid)
+        if l['zustand'] in laeufe.AKTIV:
             return 'laeuft'
+        if gesehen is not None and gesehen != entscheidung.lauf_stand(l):
+            raise Fehler(f'Lauf {lid} hat sich geändert, seit du die Übersicht geöffnet hast; bitte neu laden und prüfen')
         ablauf.fortsetzen(lid, ZUGANG)
         return 'fortgesetzt'
 
 
 async def lauf_handlung(request):
     lid = request.path_params['lid']
-    await _formular(request)
-    tun = _lauf_anhalten if request.url.path.endswith('/anhalten') else _lauf_fortsetzen
-    zurueck = f'/lauf/{quote(lid)}'
+    form = await _formular(request)
+    anhalten = request.url.path.endswith('/anhalten')
+    zurueck = ziel_nach(form, f'/lauf/{quote(lid)}')
     try:
-        code = await run_in_threadpool(tun, lid)
+        code = await run_in_threadpool(_lauf_anhalten, lid) if anhalten else await run_in_threadpool(_lauf_fortsetzen, lid, form.get('gesehen'))
     except Fehler as err:
         return _nicht_moeglich(str(err), zurueck)
     return _weiter(zurueck, code)
@@ -327,8 +373,8 @@ def _abnehmen(p, name, stufen, gesehen):
 
 async def plan_abnehmen(request):
     p, name = _projekt(request.path_params['projekt']), request.path_params['plan']
-    zurueck = _plan_ziel(p, name)
     form = await _formular(request)
+    zurueck = ziel_nach(form, _plan_ziel(p, name), p.name)
     stufen = {k[len('stufe.'):]: v.strip().lower() for k, v in form.items() if k.startswith('stufe.')}
     try:
         code = await run_in_threadpool(_abnehmen, p, name, stufen, form.get('gesehen', ''))
@@ -347,8 +393,9 @@ def _rueckmeldung(p, name, wunsch):
 
 async def plan_rueckmeldung(request):
     p, name = _projekt(request.path_params['projekt']), request.path_params['plan']
-    zurueck = _plan_ziel(p, name)
-    wunsch = roadmap.eine_zeile((await _formular(request)).get('wunsch', ''))
+    form = await _formular(request)
+    zurueck = ziel_nach(form, _plan_ziel(p, name), p.name)
+    wunsch = roadmap.eine_zeile(form.get('wunsch', ''))
     if not wunsch:
         return _nicht_moeglich('Der Änderungswunsch ist leer.', zurueck, 400)
     if len(wunsch) > MAX_ANTWORT:
@@ -387,6 +434,7 @@ def routen():
     post = ['POST']
     return [
         Route('/p/{projekt}/frage/{nr:int}/antwort', frage_beantworten, methods=post),
+        Route('/p/{projekt}/frage/{nr:int}/empfehlung', frage_empfehlung, methods=post),
         Route('/p/{projekt}/idee', idee_anlegen, methods=post),
         Route('/p/{projekt}/plan/{plan}/abnehmen', plan_abnehmen, methods=post),
         Route('/p/{projekt}/plan/{plan}/aenderung', plan_rueckmeldung, methods=post),

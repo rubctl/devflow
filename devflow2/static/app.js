@@ -78,6 +78,18 @@
       setTimeout(() => form.querySelectorAll('button').forEach((b) => { b.disabled = true; }), 0);
     });
   });
+  // „Antworten“ in der Entscheidungsliste: Zeile aufklappen und ins Antwortfeld springen (ohne Skript führt der Link zur Frage).
+  document.querySelectorAll('a[data-antworten]').forEach((a) => {
+    a.addEventListener('click', (ev) => {
+      const zeile = a.closest('li.eintrag');
+      const details = zeile && zeile.querySelector('details');
+      if (!details) return;
+      ev.preventDefault();
+      details.open = true;
+      const feld = details.querySelector('textarea');
+      if (feld) feld.focus();
+    });
+  });
   // Zurück-Taste (Seite aus dem Zwischenspeicher): Knöpfe wieder freigeben.
   window.addEventListener('pageshow', (ev) => {
     if (ev.persisted) document.querySelectorAll('form.aktion').forEach(freigeben);

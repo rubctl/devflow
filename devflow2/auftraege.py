@@ -2,9 +2,10 @@
 from . import grundlage as _g, inhaber as _i, instanz, karte as _karte
 
 REVIEW_SCHEMA = {
-    'type': 'object', 'additionalProperties': False, 'required': ['urteil', 'befunde', 'bericht'],
+    'type': 'object', 'additionalProperties': False, 'required': ['urteil', 'kurz', 'befunde', 'bericht'],
     'properties': {
         'urteil': {'type': 'string', 'enum': ['bestanden', 'nacharbeit']},
+        'kurz': {'type': 'string'},
         'befunde': {'type': 'array', 'items': {
             'type': 'object', 'additionalProperties': False, 'required': ['nr', 'schwere', 'ort', 'was'],
             'properties': {'nr': {'type': 'string'}, 'schwere': {'type': 'string'},
@@ -12,6 +13,9 @@ REVIEW_SCHEMA = {
         'bericht': {'type': 'string'},
     },
 }
+
+KURZ = ('Kurzfassung: höchstens drei Zeilen bzw. Punkte, auf dem Handy lesbar; steht ein Urteil darin, steht es in der ersten Zeile.')
+
 
 def frage():
     """Beginn einer Frage in der letzten Antwort eines Laufs, z. B. `FRAGE AN ANNA:` bzw. `FRAGE AN DEN INHABER:`, je nach Einstellung `inhaber` in `instanz.toml`."""
@@ -109,7 +113,8 @@ So arbeitest du:
 - Arbeite zielstrebig, das Review prüft unabhängig: Tests für das Abnahmekriterium und naheliegende Fehlerfälle, keine eigenen Mutations- oder Gegenproben, kein Warten auf Hintergrundläufe. Zwischendurch gezielt einzelne Tests, die volle Suite einmal am Ende.
 - {KNAPP}
 - Entscheide im Rahmen des Plans selbst und begründe es im Bericht. Nur wenn etwas wirklich {_i.akk()} betrifft (Umfang, Kosten, Daten, Nutzersicht) und du ohne Antwort nicht sinnvoll weiterkommst: beginne deine letzte Antwort mit „{frage()}“, dann Frage, Optionen mit Folgen und deine Empfehlung.
-- Deine letzte Antwort: kurz, was gebaut ist, Testergebnis, offene Punkte."""
+- Beginne den Bericht berichte/{k['id']}.md direkt unter der Überschrift mit einer Zeile `**Kurz:** …` (Urteil zuerst: gebaut, teilweise oder offen; dazu Testergebnis und offene Punkte). {KURZ}
+- Deine letzte Antwort: beginnt mit `**Kurz:** …`, dann kurz, was gebaut ist, Testergebnis, offene Punkte."""
 
 
 def nacharbeit(k, grund, details, frisch=False):
@@ -130,8 +135,8 @@ Lies zuerst den Bericht berichte/{k['id']}.md und `git log --oneline {k['basis']
 
 {details}
 
-{_grundlage(k.get('grundlage'), 'nacharbeit') if not frisch else ''}Behebe genau das, so einfach wie möglich, ergänze gezielte Tests, ergänze im Bericht berichte/{k['id']}.md einen Abschnitt „Nacharbeit“ und committe. ROADMAP.md nicht ändern, nicht mergen. {_tests(k)} {KNAPP}
-Deine letzte Antwort: kurz, was du geändert hast und das Testergebnis. Bei einer Frage, die nur {_i.nom()} entscheiden kann, beginne mit „{frage()}“."""
+{_grundlage(k.get('grundlage'), 'nacharbeit') if not frisch else ''}Behebe genau das, so einfach wie möglich, ergänze gezielte Tests, ergänze im Bericht berichte/{k['id']}.md einen Abschnitt „Nacharbeit“ (und passe dessen Zeile `**Kurz:**` an) und committe. ROADMAP.md nicht ändern, nicht mergen. {_tests(k)} {KNAPP}
+Deine letzte Antwort beginnt mit `**Kurz:** …`, dann kurz, was du geändert hast und das Testergebnis. Bei einer Frage, die nur {_i.nom()} entscheiden kann, beginne mit „{frage()}“."""
 
 
 SCHWERE = """Schwere, gemessen am Zweck des Projekts und am Abnahmekriterium:
@@ -193,8 +198,9 @@ Vorgehen: AGENTS.md lesen, Diff und Bericht lesen (Ausgaben knapp halten, Dateie
 Urteil „bestanden“ nur ohne Befund P1 oder P2.
 Antworte zum Schluss ausschließlich mit JSON nach dem vorgegebenen Schema:
 - urteil: "bestanden" oder "nacharbeit"
+- kurz: Kurzfassung, höchstens drei Zeilen; das Urteil steht in der ersten Zeile, anschließend die wichtigsten Befunde. {KURZ}
 - befunde: Liste mit nr (M1, M2 …), schwere (P1/P2/P3), ort (datei:zeile), was (konkretes Szenario: Eingabe → falsches Ergebnis)
-- bericht: vollständiger Reviewbericht in Markdown auf Deutsch nach berichte/_review-vorlage.md"""
+- bericht: vollständiger Reviewbericht in Markdown auf Deutsch nach berichte/_review-vorlage.md; direkt unter der Überschrift steht eine Zeile `**Kurz:** …` mit demselben Inhalt wie `kurz`"""
 
 
 def meinung(projekt, datei, frage, reviewer, grundlage=None, basis='main'):
@@ -204,7 +210,7 @@ Plan: `{datei}`. Lies auch AGENTS.md, ROADMAP.md und betroffene docs/-Seiten, be
 {('Frage der steuernden KI: ' + frage) if frage else ''}
 
 {_grundlage(grundlage, 'meinung')}Prüfe: Ist der Plan umsetzbar und vollständig? Passen Aufgabenschnitt, Reihenfolge und Abnahmekriterien? Welche Risiken und offenen Fragen fehlen? Was würdest du anders machen?
-Antworte als Markdown-Bericht auf Deutsch mit Überschrift „# Zweitmeinung {reviewer} · {datei}“, Urteil (tragfähig / tragfähig mit Änderungen / nicht tragfähig) und konkreten Vorschlägen."""
+Antworte als Markdown-Bericht auf Deutsch mit Überschrift „# Zweitmeinung {reviewer} · {datei}“, direkt darunter einer Zeile `**Kurz:** …` (Urteil zuerst: tragfähig / tragfähig mit Änderungen / nicht tragfähig; {KURZ}), dann dem Urteil ausführlich und konkreten Vorschlägen."""
 
 
 def nicht_ohne_inhaber():
@@ -226,6 +232,7 @@ Anlass (nur Art und Bezug):
 {_anlass(ereignisse)}
 
 {_grundlage(grundlage, 'planen')}Auftrag: Beginne mit lage(). Dann je nach Anlass:
+- Jeder Entwurf hat direkt unter der Stand-Zeile den Abschnitt `## Kurz` (höchstens drei Zeilen bzw. Punkte); plan_entwurf lehnt ihn sonst ab.
 - plan-rueckmeldung: Plan lesen, den Wunsch aus „Rückmeldung {_i.kennung()}“ einarbeiten, den Entwurf mit plan_entwurf speichern und mit frage_stellen um erneute Abnahme bitten.
 - neue-idee: eingang(projekt) lesen, für jede Idee im Zustand „neu“ einen Planentwurf nach plan/_vorlage.md mit plan_entwurf schreiben, idee_zustand auf „in Planung“ setzen und mit frage_stellen um Abnahme bitten.
 
@@ -255,7 +262,7 @@ Regeln:
 - {DATEN}
 - Nicht ohne {_i.akk()}: {nicht_ohne_inhaber()}. Du schlägst nur vor.
 
-Deine letzte Antwort ist der vollständige Bericht in Markdown auf Deutsch, ohne Überschrift erster Ebene."""
+Deine letzte Antwort ist der vollständige Bericht in Markdown auf Deutsch, ohne Überschrift erster Ebene. Die erste Zeile ist `**Kurz:** …`. {KURZ}"""
 
 
 def traum_code(projekt, grundlage=None):
@@ -269,7 +276,7 @@ Regeln:
 - {DATEN}
 - Nicht ohne {_i.akk()}: {nicht_ohne_inhaber()}. Du schlägst nur vor.
 
-Deine letzte Antwort ist der vollständige Bericht in Markdown auf Deutsch, ohne Überschrift erster Ebene. Ganz am Ende steht ein Codeblock:
+Deine letzte Antwort ist der vollständige Bericht in Markdown auf Deutsch, ohne Überschrift erster Ebene. Die erste Zeile ist `**Kurz:** …` (Zahl der Vorschläge zuerst). {KURZ} Ganz am Ende steht ein Codeblock:
 ```json
 {{"vorschlaege": [{{"thema": "zwei-drei-worte", "titel": "Kurzer Titel", "auftrag": "Was genau zu ändern ist, mit Dateien"}}]}}
 ```"""
@@ -290,7 +297,7 @@ So arbeitest du:
 - {DATEN}
 - Nicht ohne {_i.akk()}: {nicht_ohne_inhaber()}.
 
-Deine letzte Antwort ist der Bericht in Markdown auf Deutsch, ohne Überschrift erster Ebene: was geändert ist, warum, und was offen ist."""
+Deine letzte Antwort ist der Bericht in Markdown auf Deutsch, ohne Überschrift erster Ebene. Die erste Zeile ist `**Kurz:** …` (was geändert ist, in einem Satz). {KURZ} Danach: was geändert ist, warum, und was offen ist."""
 
 
 def steuern(projekt, ereignisse, grundlage=None):

@@ -4,6 +4,7 @@ import datetime
 import fcntl
 import json
 import os
+from pathlib import Path
 import subprocess
 import time
 
@@ -11,6 +12,9 @@ from . import Fehler, roadmap, schreiben
 
 
 PUSH_ZEIT = 60
+# Autor der Commits, die devflow selbst auf main schreibt. Zusammen mit den Pfaden weist er einen Statuscommit nach (`statuscommit`).
+AUTOR = 'devflow <devflow@devflow.invalid>'
+STATUSPFADE = ('ROADMAP.md',)
 
 
 def git(cwd, *args, check=True):
@@ -74,7 +78,7 @@ def auf_main_gesperrt(projekt, aenderung, nachricht, pfade=('ROADMAP.md',)):
         schreiben(projekt.repo / p, neu[p])
     try:
         git(projekt.repo, 'add', '--', *geaendert)
-        git(projekt.repo, 'commit', '-q', '-m', nachricht, '--only', '--', *geaendert)
+        git(projekt.repo, 'commit', '-q', '-m', nachricht, '--author', AUTOR, '--only', '--', *geaendert)
     except Fehler:
         # Eigene Änderung zurücknehmen: main_bereit hat geprüft, dass diese Pfade vorher sauber waren.
         ok(projekt.repo, 'reset', '-q', '--', *geaendert)
@@ -183,3 +187,61 @@ def worktrees(projekt):
 def committet(projekt, pfad):
     """Inhalt von `pfad` im letzten Commit des Haupt-Checkouts (nicht im Arbeitsverzeichnis)."""
     return git(projekt.repo, 'show', f'HEAD:{pfad}')
+
+
+# --- Rebase und Statuscommits (S14.2) -------------------------------------------------------------
+
+def rebase_laeuft(wt):
+    """Steht der Worktree in einem halben Rebase (auch von einem abgebrochenen Prozess)?"""
+    for name in ('rebase-merge', 'rebase-apply'):
+        pfad = git(wt, 'rev-parse', '--path-format=absolute', '--git-path', name, check=False)
+        if pfad and Path(pfad).exists():
+            return True
+    return False
+
+
+def rebase_abbrechen(wt):
+    """Rest eines Rebase abbrechen; danach steht der Branch wieder auf dem Ausgangsstand. Rückgabe: ob es einen Rest gab."""
+    if not rebase_laeuft(wt):
+        return False
+    ok(wt, 'rebase', '--abort')
+    if rebase_laeuft(wt):
+        raise Fehler(f'Halber Rebase in {wt} lässt sich nicht abbrechen; bitte von Hand klären')
+    return True
+
+
+def rebase(wt, ziel):
+    """Branch im Worktree auf den Commit `ziel` setzen. Rückgabe: None bei Erfolg, sonst die Konfliktpfade; der Rebase ist dann
+    schon abgebrochen und der Branch steht auf dem Ausgangsstand. Kein Aufrufer findet danach einen halben Rebase vor."""
+    rebase_abbrechen(wt)
+    r = subprocess.run(['git', 'rebase', '-q', ziel], cwd=wt, capture_output=True, text=True)
+    if r.returncode == 0:
+        return None
+    pfade = sorted({x for x in git(wt, 'diff', '--name-only', '-z', '--diff-filter=U', check=False).split('\0') if x})
+    rebase_abbrechen(wt)
+    if not pfade:
+        raise Fehler(f'Rebase auf {ziel[:7]} gescheitert: {(r.stderr or r.stdout).strip()[-400:]}')
+    return pfade
+
+
+def pfade(projekt, sha):
+    """Geänderte Pfade eines Commits gegen seinen ersten Elternteil, Umbenennungen mit beiden Pfaden."""
+    return [x for x in git(projekt.repo, 'diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', sha).split('\0') if x]
+
+
+def statuscommit(projekt, sha):
+    """Nachweislich ein Statuscommit von devflow: Autor `AUTOR`, genau ein Elternteil und nur ROADMAP.md (Status, Protokoll) geändert.
+    Der Dateiname allein genügt nicht, und der Autor allein auch nicht."""
+    kopf = git(projekt.repo, 'show', '-s', '--format=%an <%ae>%x00%P', sha).split('\0')
+    return (len(kopf) == 2 and kopf[0] == AUTOR and len(kopf[1].split()) == 1
+            and pfade(projekt, sha) == list(STATUSPFADE))
+
+
+def fachliche_commits(projekt, von, bis):
+    """Commits in `von..bis`, die keine Statuscommits von devflow sind (ältester zuerst)."""
+    return [c for c in git(projekt.repo, 'rev-list', '--reverse', f'{von}..{bis}').split() if not statuscommit(projekt, c)]
+
+
+def nur_status_dazu(projekt, alt, neu):
+    """Unterscheidet sich `neu` von `alt` höchstens in ROADMAP.md? So sieht ein Rebase über reine Statuscommits aus."""
+    return all(x in STATUSPFADE for x in git(projekt.repo, 'diff', '--name-only', '-z', alt, neu).split('\0') if x)

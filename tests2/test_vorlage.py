@@ -303,7 +303,10 @@ class TrunkKetteTest(Fall):
         (self.repo / 'fremd.txt').write_text('anderer Code auf der Basis\n')   # die Basis bewegt sich nach dem Review
         git(self.repo, 'add', 'fremd.txt')
         git(self.repo, 'commit', '-q', '-m', 'fremd auf trunk')
-        ablauf.mergen(self.p, 'A1', automatisch=False)
+        with self.assertRaisesRegex(Fehler, 'fachlich geändert'):
+            ablauf.mergen(self.p, 'A1', automatisch=False)
+        self.drehbuch(codex=[self.bestanden()])
+        ablauf.mergen(self.p, 'A1')  # Vorbereitung mit Rebase auf trunk, neues Review, dann Merge
         self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
         self.ruhig()
         self.assertEqual(git(self.repo, 'symbolic-ref', '--short', 'HEAD'), 'trunk')
@@ -317,7 +320,7 @@ class TrunkKetteTest(Fall):
         self.assertEqual(git(self.repo, 'worktree', 'list').count('\n'), 0)
         self.assertEqual(git(self.repo, 'status', '--porcelain'), '')
         self.assertEqual([(l['art'], l['zustand']) for l in laeufe.alle()],
-                         [('entwickeln', 'fertig'), ('review', 'fertig'), ('mergen', 'fertig')])
+                         [('entwickeln', 'fertig'), ('vorbereiten', 'fertig'), ('review', 'fertig'), ('vorbereiten', 'fertig'), ('review', 'fertig'), ('mergen', 'fertig')])
         self.assertIn('abgezweigt von `trunk`', self.aufrufe('claude')[0]['argv'][-1])
         review = self.aufrufe('codex')[0]['argv'][-1]
         self.assertIn('gegenüber `trunk`', review)
@@ -330,7 +333,7 @@ class TrunkKetteTest(Fall):
         self.ruhig()
         self.assertEqual((self.repo / 'app/wetter.py').read_text(), 'TEMP = 12\n')
         self.assertEqual([(l['art'], l['zustand']) for l in laeufe.alle()],
-                         [('entwickeln', 'fertig'), ('test', 'fertig'), ('review', 'fertig'), ('mergen', 'fertig')])
+                         [('entwickeln', 'fertig'), ('vorbereiten', 'fertig'), ('review', 'fertig'), ('mergen', 'fertig')])
         self.assertIn('roadmap: A1 → erledigt', git(self.repo, 'log', '--format=%s', 'trunk'))
         self.assertFalse(git(self.repo, 'branch', '--list', 'main'))
 

@@ -25,7 +25,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import Fehler, instanz, kontingent, laeufe, pflege, projekte, push, roadmap, selbstlauf, traum, vorschlag
+from . import Fehler, ablauf, instanz, kontingent, laeufe, pflege, projekte, push, roadmap, selbstlauf, traum, vorschlag
 from .ablauf import plan_zeile
 from .projekte import Projekt
 from .web_aktion import Herkunft, antwort_formular, lauf_knoepfe, meldung, routen as aktions_routen
@@ -33,11 +33,12 @@ from . import web_html
 from .web_html import Roh, e, kicker, seite, t, verbinden
 from .web_kontingent import fenster_karte, kosten_aufgaben, kosten_laeufe
 from .web_push import routen as push_routen
-from .web_md import SCHEMA, inline, md
+from . import kurz as kurzfassung
+from .web_md import SCHEMA, inline, kurz_kasten, md
 from .web_eingang import ideen_abschnitt
 from . import web_roadmap
 from .web_lage import eingang_alt, eingang_seite, lage_seite, pflege_alt, roadmap_alt
-from .web_plaene import plaene_seite, plan_seite
+from .web_plaene import plaene_seite, plan_seite, projekt_plaene_seite
 from .web_pflege import routen as pflege_routen
 from .web_traum import routen as traum_routen
 
@@ -206,7 +207,7 @@ ZUSTAND = {'wartet': ('wartet', 'idle'), 'laeuft': ('läuft', 'aktiv'), 'abschlu
            'kontingent': ('wartet auf Kontingent', 'warn'), 'angehalten': ('angehalten', 'warn'), 'fehler': ('Fehler', 'error'),
            laeufe.TRAUM_ENDE: ('Traum beendet', 'idle')}
 URTEIL = {'bestanden': ('bestanden', 'ok'), 'nacharbeit': ('Nacharbeit nötig', 'warn')}
-ART_TEXT = {'entwickeln': 'Entwicklung', 'nacharbeit': 'Nacharbeit', 'review': 'Review', 'meinung': 'Zweitmeinung', 'mergen': 'Merge',
+ART_TEXT = {'entwickeln': 'Entwicklung', 'nacharbeit': 'Nacharbeit', 'vorbereiten': 'Vorbereitung', 'review': 'Review', 'meinung': 'Zweitmeinung', 'mergen': 'Merge',
             'deploy': 'Deploy', 'test': 'Test', 'steuern': 'Steuerlauf', 'pflege': 'Pflegeprüfung', 'traum': 'Traum', 'messung': 'Kontingentmessung'}
 MODELL_TEXT = {'claude': 'Claude', 'sol': 'Sol', 'codex': 'Sol', 'shell': 'Shell', 'intern': 'intern'}
 
@@ -378,7 +379,7 @@ def projekt_seite(request):
     offen = [a for a in auf if a['status'] not in ('erledigt', 'entfällt')]
     erledigt = [a for a in auf if a['status'] in ('erledigt', 'entfällt')]
     return antwort(
-        name, t('h1', name), meldung(request), t('p', t('a', 'Pläne', href='/plaene'), ' · ', t('a', 'Wiki, Pläne, Berichte', href=f'/p/{name}/md/'), class_='leise'),
+        name, t('h1', name), meldung(request), t('p', t('a', 'Pläne', href=f'/p/{name}/plaene'), ' · ', t('a', 'Wiki, Pläne, Berichte', href=f'/p/{name}/md/'), class_='leise'),
         abschnitt('Aktuelles Vorhaben', t('p', t('strong', aktuell['titel']), ' ', t('span', f'{aktuell["erledigt"]} von {aktuell["gesamt"]} erledigt', class_='leise')) if aktuell else None,
                   aufgaben_kurz(name, offen) if offen else leer('Kein offenes Vorhaben.'), id='vorhaben'),
         abschnitt('Offene Fragen', [t('article', md(f['text'], rm), t('p', aufgabe_link(name, f['bezug'], f'zu {f["bezug"]}'))
@@ -447,7 +448,8 @@ def aufgabe_seite(request):
         zeile += [('Plan', md_link(name, pz['datei'])), ('Bereich', inline(pz['bereich'], verweise(name, pz['datei']))),
                   ('Abnahme', inline(pz['kriterium'], verweise(name, pz['datei'])))]
     laufkarten = [t('article', lauf_kopf(l), t('p', lauf_link(l, l['id'])),
-                    t('p', l['fehler'], class_='fehler') if l.get('fehler') else None, befunde(l),
+                    t('p', l['fehler'], class_='fehler') if l.get('fehler') else None,
+                    kurz_kasten(l.get('kurz')), befunde(l),
                     t('p', 'Bericht: ', md_link(name, l['bericht_datei'], l['branch'] if l.get('branch') in da else None))
                     if l.get('bericht_datei') else None,
                     t('details', t('summary', 'Log'), log_block(l, 60), open=l['zustand'] in laeufe.AKTIV),
@@ -475,6 +477,20 @@ def aufgabe_seite(request):
         pfad=[(name, f'/p/{name}'), (aid, None)], projekt=name, unter='projekt')
 
 
+def lauf_kurz(l):
+    """Kurzfassung eines Laufs: am Lauf gespeichert (Review), sonst aus dem Ergebnis (`**Kurz:**`, sonst die ersten zwei Sätze)."""
+    if l.get('kurz'):
+        return l['kurz']
+    text = laeufe.ergebnis(l)
+    if l.get('art') == 'review':  # das Ergebnis ist JSON; ältere Läufe haben kein Feld `kurz`
+        try:
+            u = ablauf.urteil(text)
+        except Fehler:
+            return ''
+        return u['kurz'] or kurzfassung.aus_text(u['bericht'])
+    return kurzfassung.aus_text(text)
+
+
 def lauf_seite(request):
     l = _lauf(request.path_params['lid'])
     anzeige = dict(art=art_text(l), modell=modell_text(l), urteil=URTEIL.get(l.get('urteil'), (l.get('urteil'),))[0])
@@ -487,13 +503,16 @@ def lauf_seite(request):
     ergebnis = laeufe.ergebnis(l)
     pfad = [(l['projekt'], f'/p/{q(l["projekt"])}')] + ([(l['aufgabe'], f'/p/{q(l["projekt"])}/a/{q(l["aufgabe"])}')] if l.get('aufgabe') else [])
     return antwort(
-        f'Lauf {l["id"]}', t('h1', 'Lauf ', t('span', l['id'], class_='leise')), meldung(request), lauf_kopf(l), lauf_knoepfe(l, fehler=True),
+        f'Lauf {l["id"]}', t('h1', 'Lauf ', t('span', l['id'], class_='leise')), meldung(request), kurz_kasten(lauf_kurz(l)), lauf_kopf(l), lauf_knoepfe(l, fehler=True),
         t('p', l['fehler'], class_='fehler') if l.get('fehler') else None,
         t('dl', [verbinden(t('dt', k), t('dd', v)) for k, v in felder], class_='zeile'),
         abschnitt('Befunde', befunde(l)) if l.get('befunde') else None,
         abschnitt('Log', log_block(l, 200)),
         abschnitt('Ergebnis', t('pre', ergebnis[-20000:], class_='log')) if ergebnis.strip() else None,
         pfad=pfad + [('Lauf', None)], projekt=l['projekt'], unter='projekt')
+
+
+KURZ_PFAD = re.compile(r'(berichte|plan)/(?!_)[^/]+\.md')  # Berichte, Reviews und Pläne bekommen oben die Kurzfassung
 
 
 def md_seite(request):
@@ -520,8 +539,10 @@ def md_seite(request):
         raise HTTPException(404, 'Datei unbekannt')
     hinweis = t('p', f'Gekürzt auf {MAX_MD // 1000} kB.', class_='hinweis') if len(roh) > MAX_MD else None
     links = verweise(name, pfad, zweig if zweig != p.cfg['basis'] else None)
+    text = roh[:MAX_MD].decode('utf-8', 'replace')
     return antwort(pfad, t('p', t('code', pfad), ' auf ', t('code', zweig), class_='leise'), hinweis,
-                   t('article', md(roh[:MAX_MD].decode('utf-8', 'replace'), links), class_='md'),
+                   kurz_kasten(kurzfassung.aus_text(text), links) if KURZ_PFAD.match(pfad) else None,
+                   t('article', md(text, links), class_='md'),
                    pfad=krumen + [(pfad, None)], projekt=name, unter='projekt')
 
 
@@ -588,6 +609,7 @@ def anwendung(login=None, hinweise=False):
         Route('/p/{projekt}/a/{aufgabe}', aufgabe_seite),
         Route('/p/{projekt}/md/{pfad:path}', md_seite),
         Route('/plaene', plaene_seite),
+        Route('/p/{projekt}/plaene', projekt_plaene_seite),
         Route('/p/{projekt}/plan/{plan}', plan_seite),
         Route('/kontingent', kontingent_seite),
         Route('/lauf/{lid}', lauf_seite),

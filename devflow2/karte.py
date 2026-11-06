@@ -35,11 +35,13 @@ def _namen(pfad):
 def karte(wt, auslassen=(), grenze=GRENZE):
     """Eine Zeile je Datei: `pfad: namen`; Berichte, Binärdateien und `auslassen` (Präfixe) fehlen."""
     try:
-        dateien = subprocess.run(['git', 'ls-files'], cwd=wt, capture_output=True, text=True, check=True).stdout.split('\n')
+        # -z: Namen mit Nicht-ASCII-Zeichen kommen unverändert, nicht in Anführungszeichen mit Oktal-Escapes
+        dateien = subprocess.run(['git', 'ls-files', '-z'], cwd=wt, capture_output=True, text=True, encoding='utf-8',
+                                 errors='surrogateescape', check=True).stdout.split('\0')
     except (OSError, subprocess.CalledProcessError):
         return ''
     zeilen, laenge = [], 0
-    weg = ('berichte/', '.', *auslassen)
+    weg = ('berichte/', '.', *(p for p in auslassen if p))  # ein leeres Präfix würde alles ausschließen
     dateien = [d for d in dateien if d and not d.startswith(weg) and not d.lower().endswith(BINAER)]
     for i, name in enumerate(dateien):
         namen = [n for n in _namen(Path(wt) / name) if n]

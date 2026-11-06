@@ -61,7 +61,7 @@ def _plan_stufen(p):
     return out
 
 
-LAUF_ART = {'entwickeln': 'Entwicklung', 'nacharbeit': 'Nacharbeit', 'review': 'Review', 'meinung': 'Zweitmeinung', 'mergen': 'Merge',
+LAUF_ART = {'entwickeln': 'Entwicklung', 'nacharbeit': 'Nacharbeit', 'vorbereiten': 'Vorbereitung', 'review': 'Review', 'meinung': 'Zweitmeinung', 'mergen': 'Merge',
             'deploy': 'Deploy', 'test': 'Test'}
 
 
@@ -208,11 +208,32 @@ def parameter(request):
     return status, sort, bool(sort) and q.get('richtung') == 'ab'
 
 
+def _datum(titel):
+    """Datum `TT.MM.JJJJ` aus der Vorhabenüberschrift als sortierbares Tupel, sonst None."""
+    m = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', titel)
+    return (int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else None
+
+
+def neueste_zuerst(gruppen):
+    """Vorhaben nach Datum der Überschrift absteigend (ohne Datum und bei Gleichstand: später in der Datei zuerst); offene vor erledigten
+    (stabil); „Sonstiges“ ohne Plan bleibt am Ende seines Blocks."""
+    nummeriert = list(enumerate(gruppen))
+    nummeriert.sort(key=lambda x: (_datum(x[1]['titel']) or (0, 0, 0), x[0]), reverse=True)
+    return sorted((g for _, g in nummeriert),
+                  key=lambda g: (g['gesamt'] > 0 and g['erledigt'] == g['gesamt'], not g['plan']))
+
+
+def _sonstiges_zeigen(g):
+    """Die Karte „Sonstiges“ entfällt, wenn es dafür keine Läufe gibt."""
+    return summen(g)['laeufe'] > 0
+
+
 def projekt_teil(p, text, basis, status, sort, absteigend):
     """Vorhabenblöcke und Filterleiste eines Projekts; Fehler in der Roadmap wirft `Fehler`."""
     web = _w()
     gruppen = zeilen(p, roadmap.vorhaben(text))
     rm = web.verweise(p.name, 'ROADMAP.md')
-    gruppen = sorted(gruppen, key=lambda g: g['gesamt'] > 0 and g['erledigt'] == g['gesamt'])  # offene zuerst, erledigte unten (stabil)
+    gruppen = [g for g in gruppen if g['plan'] or _sonstiges_zeigen(g)]
+    gruppen = neueste_zuerst(gruppen)
     bloecke = [vorhaben_block(p.name, g, i, basis, status, sort, absteigend, rm) for i, g in enumerate(gruppen)]
     return gruppen, bloecke
