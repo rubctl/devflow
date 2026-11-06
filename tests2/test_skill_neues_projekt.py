@@ -57,7 +57,7 @@ Probe.
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |
 |---|---|---|---|---|---|
-| 1.1 | Erste Aufgabe | claude | `src/` | Test grün | |
+| 1.1 | Erste Aufgabe | claude | `src/` | K1: Test grün | |
 
 ## Offene Fragen an den Inhaber
 

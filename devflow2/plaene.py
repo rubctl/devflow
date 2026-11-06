@@ -6,7 +6,7 @@ Selbstlauf (`ereignis.melden`). Abnehmen ist nur mit dem Stand möglich, den der
 import hashlib
 import re
 
-from . import Fehler, ereignis, kurz, repo, roadmap
+from . import Fehler, ereignis, kriterien, kurz, repo, roadmap
 from . import inhaber as _i
 from .ablauf import datum
 
@@ -36,7 +36,9 @@ def info(p, name):
     text = pfad(p, name).read_text(encoding='utf-8')
     pl = roadmap.plan(text)
     in_roadmap = {a['id'] for a in roadmap.aufgaben(p.roadmap.read_text(encoding='utf-8'))}
-    return dict(name=name, text=text, titel=pl['titel'], kurz=kurz.aus_text(text), abgenommen=pl['abgenommen'], aufgaben=pl['aufgaben'],
+    aufgaben = [dict(a, kriterien=kriterien.zerlegen(a['kriterium'])[1]) for a in pl['aufgaben']]  # je Aufgabe [(Nummer, Text)], leer bei Altbestand
+    return dict(name=name, text=text, titel=pl['titel'], kurz=kurz.aus_text(text), abgenommen=pl['abgenommen'], aufgaben=aufgaben,
+                altbestand=kriterien.altbestand(pl['aufgaben']),
                 stand=roadmap.plan_stand(text) or 'ohne Stand', pruefsumme=pruefsumme(text),
                 uebernommen=sum(a['id'] in in_roadmap for a in pl['aufgaben']),
                 rueckmeldung=roadmap.hat_rueckmeldung(text))
@@ -109,6 +111,8 @@ def entwurf(p, name, text):
     if not roadmap.plan_stand(text) or (name != PFLEGEPLAN and not roadmap.plan(text)['aufgaben']):
         raise Fehler(f'{rel}: erwartet eine Zeile **Stand:** und die Aufgabentabelle aus plan/_vorlage.md')
     if name != PFLEGEPLAN and (fehler := kurz.pruefen(text)):  # alte Pläne bleiben gültig; geprüft wird nur, was neu geschrieben wird
+        raise Fehler(f'{rel}: {fehler}')
+    if name != PFLEGEPLAN and (fehler := kriterien.pruefen(roadmap.plan(text)['aufgaben'])):  # nur neue Entwürfe; alte Pläne sind Altbestand
         raise Fehler(f'{rel}: {fehler}')
 
     def aendern(texte):

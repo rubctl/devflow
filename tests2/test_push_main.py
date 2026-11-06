@@ -25,7 +25,7 @@ ENTWURF = """# Vorhaben X · Claude · 03.11.2026
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |
 |---|---|---|---|---|---|
-| X1 | Etwas | claude | `a.py` | geht | leicht |
+| X1 | Etwas | claude | `a.py` | K1: geht | leicht |
 """
 
 

@@ -36,7 +36,7 @@ Nach der Abnahme durch den Inhaber wird diese Zeile genau so ersetzt: `**Stand:*
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |
 |---|---|---|---|---|---|
-| N1 | Erste | claude | `a.py` | Test grün | |
+| N1 | Erste | claude | `a.py` | K1: Test grün | |
 """
 
 

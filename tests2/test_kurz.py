@@ -36,7 +36,7 @@ Ein Ziel.
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |
 |---|---|---|---|---|---|
-| N1 | Erste | claude | `a.py` | Test grün | |
+| N1 | Erste | claude | `a.py` | K1: Test grün | |
 """
 ALTER_BERICHT = """# A9 · Alte Aufgabe · Claude
 

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "devflow"
 # ops/release.sh setzt hier die Version des Releases (v2.N → 2.N)
-version = "2.2"
+version = "2.3"
 description = "devflow 2: Werkzeug für Code, gesteuert von einer KI per MCP"
 readme = "README.md"
 license = { file = "LICENSE" }

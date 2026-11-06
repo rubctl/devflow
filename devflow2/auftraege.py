@@ -1,18 +1,31 @@
 """Aufträge (Prompts) an Entwickler-, Review- und Steuerläufe."""
-from . import grundlage as _g, inhaber as _i, instanz, karte as _karte
+from . import grundlage as _g, inhaber as _i, instanz, karte as _karte, kriterien as _kriterien
 
+# Alle Felder Pflicht (strenge Schemata erlauben keine optionalen); Altbestand gibt `kriterien: []`, Befunde ohne K-ID `kriterium: ""`.
+# Die Prüfung gegen die erwarteten IDs macht `kriterien.bewerten` (S15.3).
 REVIEW_SCHEMA = {
-    'type': 'object', 'additionalProperties': False, 'required': ['urteil', 'kurz', 'befunde', 'bericht'],
+    'type': 'object', 'additionalProperties': False, 'required': ['urteil', 'kurz', 'kriterien', 'befunde', 'bericht'],
     'properties': {
         'urteil': {'type': 'string', 'enum': ['bestanden', 'nacharbeit']},
         'kurz': {'type': 'string'},
+        'kriterien': {'type': 'array', 'items': {
+            'type': 'object', 'additionalProperties': False, 'required': ['id', 'erfuellt', 'begruendung'],
+            'properties': {'id': {'type': 'string'}, 'erfuellt': {'type': 'string', 'enum': list(_kriterien.ERFUELLT)},
+                           'begruendung': {'type': 'string'}}}},
         'befunde': {'type': 'array', 'items': {
-            'type': 'object', 'additionalProperties': False, 'required': ['nr', 'schwere', 'ort', 'was'],
+            'type': 'object', 'additionalProperties': False, 'required': ['nr', 'schwere', 'ort', 'was', 'kategorie', 'kriterium'],
             'properties': {'nr': {'type': 'string'}, 'schwere': {'type': 'string'},
-                           'ort': {'type': 'string'}, 'was': {'type': 'string'}}}},
+                           'ort': {'type': 'string'}, 'was': {'type': 'string'},
+                           'kategorie': {'type': 'string', 'enum': list(_kriterien.KATEGORIEN)}, 'kriterium': {'type': 'string'}}}},
         'bericht': {'type': 'string'},
     },
 }
+
+
+def befund_zeile(b):
+    """`- M1 (P2, kriterium K2) ort: was` für Nacharbeit und Nachprüfung; Altbefunde ohne Kategorie wie bisher `- M1 (P2) ort: was`."""
+    art = ', '.join(x for x in (b.get('kategorie'), b.get('kriterium')) if x)
+    return f'- {b["nr"]} ({b["schwere"]}{", " + art if art else ""}) {b["ort"]}: {b["was"]}'
 
 KURZ = ('Kurzfassung: höchstens drei Zeilen bzw. Punkte, auf dem Handy lesbar; steht ein Urteil darin, steht es in der ersten Zeile.')
 
@@ -22,14 +35,61 @@ def frage():
     return _i.frage_marker()
 
 
-def _aufgabe(k):
+def _kriterien_von(k):
+    """(Einleitung, [(Nummer, Text), …]) des Abnahmekriteriums der Planaufgabe; leer bei Altbestand oder ohne Plan."""
+    return _kriterien.zerlegen((k.get('plan') or {}).get('kriterium'))
+
+
+def _aufgabe(k, liste=False):
+    """`liste`: Aufgaben mit K-Nummern nennen das Abnahmekriterium als Liste, je Kriterium wörtlich (Entwicklung, Nacharbeit)."""
     teile = [f'Aufgabe {k["id"]}: {k["aufgabe"]}']
     if k.get('plan'):
         p = k['plan']
-        teile.append(f'Aus dem abgenommenen Plan `{p["datei"]}`: Bereich {p["bereich"] or "–"}; Abnahmekriterium: {p["kriterium"] or "–"}')
+        einleitung, ks = _kriterien_von(k) if liste else ('', [])
+        if ks:
+            zeilen = [f'- K{n}: {t}' for n, t in ks]
+            teile.append(f'Aus dem abgenommenen Plan `{p["datei"]}`: Bereich {p["bereich"] or "–"}; Abnahmekriterium'
+                         + (f' ({einleitung})' if einleitung else '') + ', jedes Kriterium wörtlich:\n' + '\n'.join(zeilen))
+        else:
+            teile.append(f'Aus dem abgenommenen Plan `{p["datei"]}`: Bereich {p["bereich"] or "–"}; Abnahmekriterium: {p["kriterium"] or "–"}')
     if k.get('auftrag'):
         teile.append(f'Auftrag der steuernden KI:\n{k["auftrag"]}')
     return '\n\n'.join(teile)
+
+
+# Pflichtkern der Selbstprüfung (S15.2); steht im Auftrag und in `berichte/_vorlage.md`.
+SELBSTPRUEFUNG = (
+    'gleichzeitige Aufrufe',
+    'Abbruch, Neustart und Teilfehler (atomar speichern, Rückweg)',
+    'fehlende, vorhandene oder gleiche Datei (Quelle = Ziel)',
+    'ungültige und lange Eingaben',
+    'Netz und Zeitlimit',
+    'Wiederholung und Duplikate mit geänderten Optionen',
+    'alle Zugänge und Sperren (MCP, Dashboard, Kette, Fortsetzen)',
+    'alte Daten und Konfigurationen',
+)
+
+
+def _kriterien_liste(k):
+    """Die Kriterien der Aufgabe wörtlich als Block (für die Nacharbeit in laufender Sitzung); leer bei Altbestand."""
+    ks = _kriterien_von(k)[1]
+    return ('Kriterien der Aufgabe, wörtlich aus dem Plan:\n' + '\n'.join(f'- K{n}: {t}' for n, t in ks) + '\n\n') if ks else ''
+
+
+def _bericht_pflicht(k, nacharbeit=False):
+    """Pflichtabschnitte des Berichts: „Kriterien“ (nur bei K-Nummern) und „Selbstprüfung“ (immer, mit Checkliste).
+    Fehlen sie, startet das Review trotzdem (kein Tor); das Review wertet das Fehlen."""
+    ks = _kriterien_von(k)[1]
+    wort = 'Aktualisiere im Bericht' if nacharbeit else 'Der Bericht enthält'
+    teile = []
+    if ks:
+        teile.append(f'{wort} den Abschnitt „Kriterien“: je ' + ', '.join(f'K{n}' for n, _ in ks)
+                     + ', wie es belegt ist (Test, Befehl, Probe) oder „nicht ausführbar, Grund …“. Belege sind Orientierung für das Review, ersetzen es nicht.')
+    teile.append(f'{wort} den Abschnitt „Selbstprüfung“. Gehe vor dem Übergeben jeden Punkt durch und schreibe je Punkt '
+                 '„betrifft nicht, weil …“ oder „abgesichert durch …“ (Test, Code, Probe): '
+                 + '; '.join(SELBSTPRUEFUNG) + '. Dazu bei Oberflächen Handybreite, Maskierung (Escapen von Eingaben) und Tastatur, bei Doku das tatsächliche Verhalten '
+                 '(Befehl oder Probe, nicht der Soll-Text). Ein Punkt, der betrifft und nicht abgesichert ist, wird vor dem Übergeben behoben, nicht nur genannt.')
+    return ' '.join(teile)
 
 
 GRUNDREGEL = ('Eine Grundentscheidung ist, was später teuer umzukehren ist: Sprache und Rahmenwerk, Datenbank und Datenmodell im Kern, Betrieb und '
@@ -101,7 +161,7 @@ def _tests(k):
 def entwickeln(k):
     return f"""Du bist Entwickler im Projekt {k['projekt']}. Arbeitsverzeichnis ist der Worktree {k['worktree']} auf Branch `{k['branch']}`, abgezweigt von `{k['basis']}`.
 
-{_aufgabe(k)}
+{_aufgabe(k, True)}
 
 {_grundlage(k.get('grundlage'), 'entwickeln')}{_einstieg(k)}
 
@@ -112,6 +172,7 @@ So arbeitest du:
 - Am Ende ist alles committet (`git status` sauber).
 - Arbeite zielstrebig, das Review prüft unabhängig: Tests für das Abnahmekriterium und naheliegende Fehlerfälle, keine eigenen Mutations- oder Gegenproben, kein Warten auf Hintergrundläufe. Zwischendurch gezielt einzelne Tests, die volle Suite einmal am Ende.
 - {KNAPP}
+- {_bericht_pflicht(k)}
 - Entscheide im Rahmen des Plans selbst und begründe es im Bericht. Nur wenn etwas wirklich {_i.akk()} betrifft (Umfang, Kosten, Daten, Nutzersicht) und du ohne Antwort nicht sinnvoll weiterkommst: beginne deine letzte Antwort mit „{frage()}“, dann Frage, Optionen mit Folgen und deine Empfehlung.
 - Beginne den Bericht berichte/{k['id']}.md direkt unter der Überschrift mit einer Zeile `**Kurz:** …` (Urteil zuerst: gebaut, teilweise oder offen; dazu Testergebnis und offene Punkte). {KURZ}
 - Deine letzte Antwort: beginnt mit `**Kurz:** …`, dann kurz, was gebaut ist, Testergebnis, offene Punkte."""
@@ -122,7 +183,7 @@ def nacharbeit(k, grund, details, frisch=False):
     if frisch:
         einstieg = f"""Du bist Entwickler im Projekt {k['projekt']} und übernimmst die Nacharbeit in einer frischen Sitzung.
 
-{_aufgabe(k)}
+{_aufgabe(k, True)}
 
 {_grundlage(k.get('grundlage'), 'nacharbeit')}{_einstieg(k)}
 
@@ -135,7 +196,7 @@ Lies zuerst den Bericht berichte/{k['id']}.md und `git log --oneline {k['basis']
 
 {details}
 
-{_grundlage(k.get('grundlage'), 'nacharbeit') if not frisch else ''}Behebe genau das, so einfach wie möglich, ergänze gezielte Tests, ergänze im Bericht berichte/{k['id']}.md einen Abschnitt „Nacharbeit“ (und passe dessen Zeile `**Kurz:**` an) und committe. ROADMAP.md nicht ändern, nicht mergen. {_tests(k)} {KNAPP}
+{_kriterien_liste(k) if not frisch else ''}{_grundlage(k.get('grundlage'), 'nacharbeit') if not frisch else ''}Behebe genau das, so einfach wie möglich, ergänze gezielte Tests, ergänze im Bericht berichte/{k['id']}.md einen Abschnitt „Nacharbeit“ (und passe dessen Zeile `**Kurz:**` an) und committe. {_bericht_pflicht(k, True)} ROADMAP.md nicht ändern, nicht mergen. {_tests(k)} {KNAPP}
 Deine letzte Antwort beginnt mit `**Kurz:** …`, dann kurz, was du geändert hast und das Testergebnis. Bei einer Frage, die nur {_i.nom()} entscheiden kann, beginne mit „{frage()}“."""
 
 
@@ -176,30 +237,58 @@ def _vorgaben_pruefung(k):
               'Ist er es nicht, melde die Abweichung als Befund.')
 
 
+def _soll(k):
+    """Erwartete K-IDs des Reviews: von `ablauf.review_anfordern` gesetzt (`kriterien_soll`), sonst aus der Planzeile."""
+    return k['kriterien_soll'] if 'kriterien_soll' in k else _kriterien.soll(k.get('plan'))
+
+
+def _review_kriterien(k):
+    """Prüfauftrag zu Kriterien, Belegen und Selbstprüfung (S15.3); bei Altbestand nur der Hinweis auf die Selbstprüfung."""
+    ids = _soll(k)
+    teile = ['Die Abschnitte „Kriterien“ (Belege) und „Selbstprüfung“ im Bericht des Entwicklers sind Orientierung, kein Nachweis: '
+             'Diff, Projektregeln (AGENTS.md) und Planzusagen prüfst du selbst. Fehlt ein Abschnitt oder ist er pauschal abgehakt, ist das ein Befund '
+             '(P3, kategorie sonst); bleibt dadurch ein Kriterium unbelegt, bewertest du es selbst.']
+    if ids:
+        teile.insert(0, f'Bewerte jedes Kriterium ({", ".join(ids)}) einzeln: „ja“ (erfüllt und belegt), „teilweise“ oder „nein“, je mit Begründung. '
+                        '„nein“ und „teilweise“ sind mindestens P2 und lösen Nacharbeit aus; nenne dazu einen Befund mit kategorie kriterium und der K-ID. '
+                        'Zusagen aus Ziel oder Rahmen des Plans, die als K genannt sind, gehören dazu.')
+    return '\n' + ' '.join(teile) + '\n'
+
+
+def _kriterien_feld(k):
+    ids = _soll(k)
+    if ids:
+        return ('Liste mit genau einem Eintrag je Kriterium ' + ', '.join(ids) + ' (id, erfuellt: "ja", "nein" oder "teilweise", begruendung). '
+                'Fehlende, doppelte oder unbekannte IDs sind ein Formatfehler, das Review zählt dann nicht.')
+    return '[] (leere Liste): Die Aufgabe ist Altbestand ohne nummerierte Kriterien; das Abnahmekriterium prüfst du wie bisher als Ganzes.'
+
+
 def review(k, runde, vorher, name):
     g = k.get('grundlage')
     frueher = ''
     if vorher:
-        frueher = ('\n\nBefunde der letzten Runde:\n' + '\n'.join(
-            f'- {b["nr"]} ({b["schwere"]}) {b["ort"]}: {b["was"]}' for b in vorher)
+        frueher = ('\n\nBefunde der letzten Runde:\n' + '\n'.join(befund_zeile(b) for b in vorher)
             + f'\n\nDies ist eine Nachprüfung. Seit der letzten Runde geändert: `git diff {k["vorher_commit"]}..{k["commit"]}`; '
               'den Rest hast du schon geprüft. Prüfe, ob diese Befunde behoben sind und die Nacharbeit nichts Neues '
-              'kaputt gemacht hat. Neue Befunde anderswo nur bei P1; sonst als P3 in den Bericht.' + _nachreview_ausnahme(g))
+              'kaputt gemacht hat. Neue Befunde anderswo nur bei P1; sonst als P3 in den Bericht.' + _nachreview_ausnahme(g)
+            + (' Vorrang vor dieser Regel: Bewerte jede Runde alle Kriterien neu; ein Kriterium mit „nein“ oder „teilweise“ ist auch hier '
+               'mindestens P2 und löst Nacharbeit aus.' if _soll(k) else ''))
     return f"""Du bist {name}, unabhängiger Reviewer im Projekt {k['projekt']} (Runde {runde}). Unterschreibe den Bericht als {name}. Dein Arbeitsverzeichnis {k['cwd']} ist eine eigene, losgelöste Kopie von Commit {k['commit']} (Branch `{k['branch']}`); Änderungen darin werden verworfen.
 
-{_aufgabe(k)}
+{_aufgabe(k, True)}
 
 {_grundlage(g, 'review')}Geprüft wird die Änderung gegenüber `{k['basis']}`: `git diff {k['basis_commit']}..{k['commit']}`. Bericht des Entwicklers: berichte/{k['id']}.md. ROADMAP.md pflegt devflow auf `{k['basis']}`; der Stand in deiner Kopie ist absichtlich alt und kein Befund.{frueher}{_vorgaben_pruefung(k)}
 
 Vorgehen: AGENTS.md lesen, Diff und Bericht lesen (Ausgaben knapp halten, Dateien gezielt lesen), Tests ausführen, bei Bedarf eigene Proben (außerhalb des Repos, z. B. in /tmp). Prüfe Korrektheit, Abnahmekriterium, Tests, Wiki (docs/) und Bericht. {_tests(k)}
-
+{_review_kriterien(k)}
 {schwere(g)}
 
 Urteil „bestanden“ nur ohne Befund P1 oder P2.
 Antworte zum Schluss ausschließlich mit JSON nach dem vorgegebenen Schema:
 - urteil: "bestanden" oder "nacharbeit"
 - kurz: Kurzfassung, höchstens drei Zeilen; das Urteil steht in der ersten Zeile, anschließend die wichtigsten Befunde. {KURZ}
-- befunde: Liste mit nr (M1, M2 …), schwere (P1/P2/P3), ort (datei:zeile), was (konkretes Szenario: Eingabe → falsches Ergebnis)
+- kriterien: {_kriterien_feld(k)}
+- befunde: Liste mit nr (M1, M2 …), schwere (P1/P2/P3), ort (datei:zeile), was (konkretes Szenario: Eingabe → falsches Ergebnis), kategorie (kriterium: Abnahmekriterium oder Planzusage nicht erfüllt; rand: übersehener Rand- oder Fehlerfall; sonst: alles andere, z. B. Doku, Stil) und kriterium (die betroffene K-ID, sonst "")
 - bericht: vollständiger Reviewbericht in Markdown auf Deutsch nach berichte/_review-vorlage.md; direkt unter der Überschrift steht eine Zeile `**Kurz:** …` mit demselben Inhalt wie `kurz`"""
 
 

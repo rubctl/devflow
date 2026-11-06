@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 from . import Fehler, kontingent, laeufe, roadmap
 from .projekte import NAMEN
-from .web_html import t
+from .web_html import status as status_baustein, t
 from .web_kontingent import geld
 from .web_md import inline
 
@@ -237,3 +237,21 @@ def projekt_teil(p, text, basis, status, sort, absteigend):
     gruppen = neueste_zuerst(gruppen)
     bloecke = [vorhaben_block(p.name, g, i, basis, status, sort, absteigend, rm) for i, g in enumerate(gruppen)]
     return gruppen, bloecke
+
+
+ERFUELLT_TEXT = {'ja': ('ja', 'ok'), 'teilweise': ('teilweise', 'warn'), 'nein': ('nein', 'error')}
+
+
+def kriterien_tabelle(l):
+    """Bewertung je Kriterium eines Reviewlaufs (S15.3) als Tabelle; Altbestand als Hinweis, sonst nichts (andere Läufe, ältere Reviews)."""
+    if l.get('art') != 'review' or not l.get('urteil'):
+        return None
+    if not l.get('kriterien'):
+        return t('p', 'Altbestand: ohne nummerierte Kriterien geprüft.', class_='leise') if l.get('altbestand') else None
+    zeilen_ = [t('tr', t('th', k.get('id', ''), scope='row'),
+                 t('td', status_baustein(*ERFUELLT_TEXT.get(k.get('erfuellt'), (k.get('erfuellt', ''), 'idle')))),
+                 t('td', k.get('begruendung', ''))) for k in l['kriterien']]
+    kopf = t('thead', t('tr', t('th', 'Kriterium', scope='col'), t('th', 'Erfüllt', scope='col'), t('th', 'Begründung', scope='col')))
+    titel = f'Kriterien Runde {l.get("runde") or "?"}'
+    return t('div', t('table', t('caption', titel), kopf, t('tbody', zeilen_), class_='kriterien-tabelle'), class_='tabellenkasten', tabindex='0',
+             role='region', aria_label=titel)

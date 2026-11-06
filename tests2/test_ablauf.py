@@ -730,3 +730,157 @@ class StufenTest(Fall):
 if __name__ == '__main__':
     unittest.main()
 
+
+
+K_PLAN = """# Vorhaben Wetter · Claude · 06.11.2026
+
+**Stand:** abgenommen vom Inhaber am 06.11.2026
+
+## Aufgaben
+
+| ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium |
+|---|---|---|---|---|
+| A1 | Wetter-Kachel | claude | `app/wetter.py` | **K1 Anzeige:** Kachel zeigt Temperatur<br>**K2 Tests:** Test für leere Daten |
+| A2 | Suche | claude | `app/suche.py` | Suche liefert Treffer |
+"""
+
+
+def k_urteil(urteil='bestanden', kriterien=(('K1', 'ja', 'belegt'), ('K2', 'ja', 'belegt')), befunde=()):
+    return {'urteil': urteil, 'kurz': f'{urteil}.', 'bericht': f'# Review\n\n{urteil}.', 'befunde': list(befunde),
+            'kriterien': [dict(id=i, erfuellt=e, begruendung=b) for i, e, b in kriterien]}
+
+
+class KriterienUrteilTest(unittest.TestCase):
+    """S15.3 K1–K5, K7: Bewertung je Kriterium im Review-JSON."""
+    SOLL = ['K1', 'K2']
+
+    def urteil(self, d, soll=SOLL):
+        import json
+        return ablauf.urteil(json.dumps(d), soll)
+
+    def test_alle_ja_ohne_befund_bestanden(self):
+        u = self.urteil(k_urteil())
+        self.assertEqual(u['urteil'], 'bestanden')
+        self.assertEqual([k['id'] for k in u['kriterien']], ['K1', 'K2'])
+        self.assertEqual(u['befunde'], [])
+
+    def test_teilweise_oder_nein_ist_nacharbeit_mit_p2(self):
+        for wert in ('teilweise', 'nein'):
+            with self.subTest(wert):
+                u = self.urteil(k_urteil(kriterien=[('K1', 'ja', 'ok'), ('K2', wert, 'leere Daten ungetestet')]))
+                self.assertEqual(u['urteil'], 'nacharbeit')
+                self.assertEqual(u['befunde'], [dict(nr='M1', schwere='P2', ort='Abnahmekriterium', was=f'K2 {wert}: leere Daten ungetestet',
+                                                     kategorie='kriterium', kriterium='K2')])
+        # Befund des Reviewers zu dem Kriterium als P3 (z. B. Nachreview-Regel) wird P2, kein zusätzlicher Befund
+        u = self.urteil(k_urteil(kriterien=[('K1', 'ja', 'ok'), ('K2', 'teilweise', 'fehlt')],
+                                 befunde=[dict(nr='M1', schwere='P3', ort='t.py:1', was='x', kategorie='kriterium', kriterium='K2')]))
+        self.assertEqual((u['urteil'], [b['schwere'] for b in u['befunde']]), ('nacharbeit', ['P2']))
+
+    def test_befunde_tragen_kategorie_und_k_id(self):
+        u = self.urteil(k_urteil(befunde=[dict(nr='M1', schwere='P3', ort='a:1', was='y', kategorie='Rand', kriterium=''),
+                                          dict(nr='M2', schwere='P3', ort='a:2', was='z', kategorie='kriterium', kriterium='k1')]))
+        self.assertEqual(u['urteil'], 'bestanden')
+        self.assertEqual([(b['kategorie'], b['kriterium']) for b in u['befunde']], [('rand', ''), ('kriterium', 'K1')])
+
+    def test_formfehler(self):
+        ok = [('K1', 'ja', 'a'), ('K2', 'ja', 'b')]
+        faelle = {
+            'fehlend K2': k_urteil(kriterien=ok[:1]),
+            'doppelt K1': k_urteil(kriterien=ok + [('K1', 'ja', 'c')]),
+            'unbekannt K3': k_urteil(kriterien=ok + [('K3', 'ja', 'c')]),
+            'erlaubt sind ja, nein, teilweise': k_urteil(kriterien=[('K1', 'vielleicht', 'a'), ok[1]]),
+            'braucht eine Begründung': k_urteil(kriterien=[('K1', 'nein', ' '), ok[1]]),
+            'kriterien fehlt': {k: v for k, v in k_urteil().items() if k != 'kriterien'},
+            'kategorie muss': k_urteil(befunde=[dict(nr='M1', schwere='P3', ort='a', was='b', kategorie='egal', kriterium='')]),
+            'Kategorie fehlt': k_urteil(befunde=[dict(nr='M1', schwere='P3', ort='a', was='b')]),
+            'unbekanntes Kriterium K9': k_urteil(befunde=[dict(nr='M1', schwere='P3', ort='a', was='b', kategorie='kriterium', kriterium='K9')]),
+            'braucht die K-ID': k_urteil(befunde=[dict(nr='M1', schwere='P3', ort='a', was='b', kategorie='kriterium', kriterium='')]),
+        }
+        for text, d in faelle.items():
+            with self.subTest(text):
+                with self.assertRaises(Fehler) as f:
+                    self.urteil(d)
+                self.assertIn('Formfehler', str(f.exception))
+                if text != 'Kategorie fehlt':
+                    self.assertIn(text, str(f.exception))
+
+    def test_altbestand_ohne_kriterien_wie_bisher(self):
+        alt = {'urteil': 'bestanden', 'bericht': 'x', 'befunde': [{'nr': 'M1', 'schwere': 'P3', 'ort': 'a:1', 'was': 'y'}]}
+        u = self.urteil(alt, [])
+        self.assertEqual((u['urteil'], u['kriterien'], u['befunde'][0]['kategorie']), ('bestanden', [], ''))
+        self.assertEqual(self.urteil(dict(alt, kriterien=[]), [])['urteil'], 'bestanden')
+        with self.assertRaises(Fehler):  # Altbestand kennt keine K-IDs
+            self.urteil(k_urteil(), [])
+
+    def test_soll_nur_ausdruecklicher_altbestand(self):
+        from devflow2 import kriterien
+        self.assertEqual(kriterien.soll(dict(id='A1', kriterium='K1: a<br>K2: b', altbestand=False)), ['K1', 'K2'])
+        self.assertEqual(kriterien.soll(None), [])
+        self.assertEqual(kriterien.soll(dict(id='A1', kriterium='alles', altbestand=True)), [])
+        with self.assertRaises(Fehler):
+            kriterien.soll(dict(id='A2', kriterium='alles', altbestand=False))
+
+    def test_tabelle_je_runde_maskiert(self):
+        from devflow2 import web_roadmap
+        l = dict(art='review', urteil='nacharbeit', runde=2, kriterien=[dict(id='K1', erfuellt='teilweise', begruendung='<b>fehlt</b>')])
+        html = str(web_roadmap.kriterien_tabelle(l))
+        self.assertIn('Kriterien Runde 2', html)
+        self.assertIn('teilweise', html)
+        self.assertIn('&lt;b&gt;fehlt', html)
+        self.assertIn('tabellenkasten', html)
+        self.assertIn('Altbestand', str(web_roadmap.kriterien_tabelle(dict(art='review', urteil='bestanden', altbestand=True))))
+        self.assertIsNone(web_roadmap.kriterien_tabelle(dict(art='entwickeln')))
+
+
+class KriterienKetteTest(Fall):
+    """S15.3: Kette mit einem Plan mit K-Nummern."""
+    plan_text = K_PLAN
+
+    def starten(self, aufgabe='A1'):
+        ablauf.plan_uebernehmen(self.p, 'plan/wetter.md')
+        return ablauf.entwickeln(self.p, aufgabe, automatisch=True)
+
+    def test_teilweise_nacharbeit_dann_bestanden_mit_tabelle(self):
+        self.drehbuch(claude=[{'tue': 'commit'}, {'tue': 'commit', 'dateien': {'test_leer.txt': 'ok\n'}}],
+                      codex=[{'tue': 'urteil', 'urteil': k_urteil('bestanden', [('K1', 'ja', 'ok'), ('K2', 'teilweise', 'leere Daten fehlen')])},
+                             {'tue': 'urteil', 'urteil': k_urteil()}])
+        self.starten()
+        self.warten(lambda: self.zeile('A1')[3] == 'erledigt')
+        self.ruhig()
+        erste, zweite = [l for l in laeufe.alle('demo', 'A1') if l['art'] == 'review']
+        self.assertEqual((erste['kriterien_soll'], erste['altbestand'], erste['urteil']), (['K1', 'K2'], False, 'nacharbeit'))
+        self.assertEqual(erste['befunde'][0]['kriterium'], 'K2')
+        self.assertEqual([k['erfuellt'] for k in erste['kriterien']], ['ja', 'teilweise'])
+        self.assertEqual(zweite['urteil'], 'bestanden')
+        auftrag = self.aufrufe('codex')[0]['argv'][-1]
+        self.assertIn('- K1: Anzeige: Kachel zeigt Temperatur', auftrag)
+        self.assertIn('Bewerte jedes Kriterium (K1, K2)', auftrag)
+        self.assertIn('M1 (P2, kriterium, K2) Abnahmekriterium: K2 teilweise: leere Daten fehlen', self.aufrufe('claude')[1]['argv'][-1])
+        self.assertIn('M1 (P2, kriterium, K2)', self.aufrufe('codex')[1]['argv'][-1])
+        from test_kurz import LOGIN, TestClient, web  # test_kurz stellt die Starlette-Warnung ab
+        s = TestClient(web.anwendung(), headers=LOGIN).get('/p/demo/a/A1').text
+        self.assertIn('Kriterien Runde 1', s)
+        self.assertIn('Kriterien Runde 2', s)
+        self.assertIn('leere Daten fehlen', s)
+
+    def test_fehlende_id_wird_nachgefragt_nicht_bestanden(self):
+        ohne_k2 = {'tue': 'urteil', 'urteil': k_urteil(kriterien=[('K1', 'ja', 'ok')])}
+        self.drehbuch(claude=[{'tue': 'commit'}], codex=[ohne_k2, ohne_k2])
+        self.starten()
+        self.warten(lambda: self.zeile('A1')[3] == 'blockiert')
+        self.ruhig()
+        nachfrage = self.aufrufe('codex')[1]['argv']
+        self.assertEqual(nachfrage[1], 'resume')
+        self.assertIn('fehlend K2', nachfrage[-1])
+        self.assertIn('Formfehler', self.zeile('A1')[5])
+        review = [l for l in laeufe.alle() if l['art'] == 'review'][0]
+        self.assertIsNone(review.get('urteil'))
+        self.assertFalse([l for l in laeufe.alle() if l['art'] == 'mergen'])
+
+    def test_aufgabe_ohne_k_in_k_plan_kein_stiller_altbestand(self):
+        self.drehbuch(claude=[{'tue': 'commit'}])
+        self.starten('A2')
+        self.warten(lambda: self.zeile('A2')[3] == 'blockiert')
+        self.ruhig()
+        self.assertIn('keine nummerierten Kriterien', self.zeile('A2')[5])
+        self.assertFalse([l for l in laeufe.alle() if l['art'] == 'review'])

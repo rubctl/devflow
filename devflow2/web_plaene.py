@@ -144,6 +144,23 @@ def projekt_plaene_seite(request):
                      pfad=[(name, f'/p/{quote(name)}'), ('Pläne', None)], projekt=name, unter='projekt')
 
 
+def kriterien_abschnitt(pl):
+    """Je Aufgabe die erkannten Kriterien (K-Nummer und Text) als Liste, vor und nach der Abnahme. Pläne ohne K-Nummern: Altbestand, mit dem
+    Kriterium im Wortlaut; eine einzelne Aufgabe ohne K in einem Plan mit K-Nummern bekommt den Hinweis „keine nummerierten Kriterien“."""
+    if not pl['aufgaben']:
+        return None
+    zeilen = []
+    for a in pl['aufgaben']:
+        if a['kriterien']:
+            inhalt = t('ul', [t('li', t('strong', f'K{n}'), ' ', text) for n, text in a['kriterien']], class_='liste kriterien')
+        else:
+            inhalt = t('p', a['kriterium'] or 'ohne Kriterium', class_='leise')
+        zeilen.append(t('li', t('strong', a['id']), ' ', a['aufgabe'],
+                        t('span', 'Altbestand' if pl['altbestand'] else 'keine nummerierten Kriterien', class_='leise') if not a['kriterien'] else None, inhalt))
+    kopf = t('p', 'Altbestand: Plan ohne nummerierte Kriterien (vor S15.1), das Kriterium steht im Wortlaut.', class_='leise') if pl['altbestand'] else None
+    return _w().abschnitt('Kriterien', kopf, t('ul', zeilen, class_='liste'), id='kriterien')
+
+
 def plan_seite(request):
     w = _w()
     name, plan = request.path_params['projekt'], request.path_params['plan']
@@ -162,6 +179,6 @@ def plan_seite(request):
         handeln = [w.abschnitt('Abnehmen', t('p', 'Stufe je Aufgabe: leicht = Sonnet, wenig Aufwand; normal = Sonnet, hoher Aufwand; schwer = Opus.', class_='leise'),
                                *plan_formulare(p, pl), id='abnehmen')]
     return w.antwort(pl['titel'], t('h1', pl['titel']), meldung(request), kurz_kasten(pl['kurz'], w.verweise(name, datei)), kopf,
-                     *handeln,
+                     *handeln, kriterien_abschnitt(pl),
                      w.abschnitt('Plan', t('article', md(pl['text'], w.verweise(name, datei)), class_='md')),
                      pfad=[(name, f'/p/{quote(name)}'), ('Pläne', f'/p/{quote(name)}/plaene'), (plan, None)], projekt=name, unter='projekt')

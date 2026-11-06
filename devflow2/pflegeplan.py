@@ -308,7 +308,7 @@ def _entwurf_text(heute, nr, fragen, plan, p):
         '| Paket | Aktuell | Neu | Grund |', '|---|---|---|---|', *zeilen, '', '## Aufgaben', '',
         roadmap.PLANKOPF_STUFE, '|---|---|---|---|---|---|',
         f'| U.{heute}.{nr} | Update: {roadmap.zelle(", ".join(sorted({k["paket"] for k in fragen})))} | {p.cfg["entwickler"]} | '
-        f'{", ".join(f"`{x}`" for x in plan["dateien"])} | Tests grün, Brüche im Code behoben, Rückweg geprüft | schwer |', '',
+        f'{", ".join(f"`{x}`" for x in plan["dateien"])} | K1: Tests grün.<br>K2: Brüche im Code behoben.<br>K3: Rückweg geprüft. | schwer |', '',
         '## Risiken', '', f'- Rückweg laut Pflegeplan: {roadmap.eine_zeile(plan["rueckweg"])}', ''])
 
 

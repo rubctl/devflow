@@ -5,7 +5,7 @@ Die Zahlen kommen aus `kontingent.py`. „unbekannt“ steht, wo nichts gemessen
 """
 import time
 
-from . import kontingent
+from . import kennzahlen, kontingent
 from .web_html import status, t
 
 WER = {'claude': 'Claude', 'sol': 'Sol'}
@@ -124,4 +124,43 @@ def kosten_laeufe(je_lauf, lauf_link, lauf_name, zeit, zustand):
     kopf = t('thead', t('tr', [t('th', x) for x in ('Lauf', 'Aufgabe', 'Zeit', 'Zustand', 'Kosten')]))
     zeilen = [t('tr', t('td', lauf_link(e['lauf'], lauf_name(e['lauf']))), t('td', e['lauf'].get('aufgabe') or '–'),
                 t('td', zeit(e['lauf'].get('angelegt'))), t('td', zustand(e['lauf'])), t('td', geld(e['kosten']))) for e in je_lauf]
+    return t('div', t('table', kopf, t('tbody', zeilen), class_='kosten'), class_='breit')
+
+
+GRUPPEN_NAMEN = {'altbestand': 'Altbestand (ohne K-Kriterien)', 'kriterien': 'Mit K-Kriterien'}
+
+
+def _anteil(n, m):
+    return '–' if not m else f'{round(100 * n / m)} % ({n} von {m})'
+
+
+def _dauer(s):
+    if s is None:
+        return '–'
+    m = round(s / 60)
+    return f'{m // 60} h {m % 60:02d} min' if m >= 60 else f'{m} min'
+
+
+def _zahl(x):
+    return f'{x:.1f}'.replace('.', ',')
+
+
+def nacharbeit(daten):
+    """Abschnitt „Nacharbeit“: je Kennzahl eine Zeile, Altbestand neben Aufgaben mit K-Kriterien (`kennzahlen.stand()`)."""
+    def zeile(name, f):
+        return t('tr', t('th', name, scope='row'), *[t('td', f(daten[g])) for g in kennzahlen.GRUPPEN])
+    def befunde(d):
+        return ', '.join(f'{k} {n}' for k, n in sorted(d['befunde'].items(), key=lambda x: (x[0] == kennzahlen.NICHT_ZUGEORDNET, x[0]))) or '–'
+    def ursachen(d):
+        return ', '.join(f'{u} {n}' for u, n in d['ursachen'].items()) if d['runden'] else '–'
+    zeilen = [
+        zeile('Aufgaben', lambda d: d['aufgaben']),
+        zeile('Mit Nacharbeit nach Review', lambda d: _anteil(d['mit_nacharbeit'], d['bewertet'])),
+        zeile('Nacharbeit wegen roter Tests', lambda d: _anteil(d['mit_tests'], d['aufgaben'])),
+        zeile('Runden je Aufgabe', lambda d: _zahl(d['runden'] / d['aufgaben']) if d['aufgaben'] else '–'),
+        zeile('Runden nach Ursache', ursachen),
+        zeile('Befunde nach Kategorie', befunde),
+        zeile('Aktive Zeit je Aufgabe', lambda d: _dauer(d['zeit'] / d['mit_zeit']) if d['mit_zeit'] else '–'),
+    ]
+    kopf = t('thead', t('tr', t('th', ''), *[t('th', GRUPPEN_NAMEN[g]) for g in kennzahlen.GRUPPEN]))
     return t('div', t('table', kopf, t('tbody', zeilen), class_='kosten'), class_='breit')

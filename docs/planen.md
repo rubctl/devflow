@@ -23,6 +23,7 @@ Der Inhaber startet sie selbst in Claude Code mit Opus, je Plan eine Sitzung (`/
 - **Prüfblickwinkel** je Sitzung: Fachlichkeit, Betrieb, Sicherheit, Daten, Kosten.
 - **Grundentscheidung:** Braucht das Vorhaben eine, entsteht der Vorschlag vor den Aufgaben (Status `vorgeschlagen`).
 - **Kurzfassung:** Jeder Entwurf hat unter der Stand-Zeile den Abschnitt `## Kurz` (höchstens drei Zeilen bzw. Punkte, Entscheidung für den Inhaber zuerst); `plan_entwurf` lehnt neue Entwürfe ohne ihn ab, ältere Pläne bleiben gültig ([Dashboard](dashboard.md#kurzfassung-s141)).
+- **Kriterien:** Das Abnahmekriterium jeder Aufgabe besteht aus nummerierten Kriterien `K1: …<br>K2: …` (S15.1). `plan_entwurf` lehnt neue Entwürfe ab, in denen eine Aufgabe keine K-Nummern hat oder eine Nummer doppelt vorkommt (`devflow2/kriterien.py`; erkannt wird `K<Zahl>:` am Anfang eines `<br>`-Abschnitts, auch fett und mit kurzem Titel; Text ohne Nummer gehört zum vorigen K, Text vor K1 ist ein Abschnittskopf und kein Kriterium). Pläne ohne K-Nummern bleiben gültig und gelten als Altbestand. Die Planseite zeigt je Aufgabe die erkannten Kriterien als Liste, auch vor der Abnahme; bei Altbestand steht das Kriterium im Wortlaut mit dem Hinweis „Altbestand“.
 - **Ergebnis:** Entwurf über `plan_entwurf` mit `**Stand:** Entwurf`, bei wichtigen Plänen Zweitmeinung von Sol. Kein Modell legt einen Plan als abgenommen an; die Zeile ändert der Inhaber.
 - **Kontingent:** Die Sitzung läuft aus dem Kontingent des Inhabers, nicht aus dem Budget des Selbstlaufs.
 

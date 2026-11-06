@@ -25,13 +25,13 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import Fehler, ablauf, instanz, kontingent, laeufe, pflege, projekte, push, roadmap, selbstlauf, traum, vorschlag
+from . import Fehler, ablauf, instanz, kennzahlen, kontingent, laeufe, pflege, projekte, push, roadmap, selbstlauf, traum, vorschlag
 from .ablauf import plan_zeile
 from .projekte import Projekt
 from .web_aktion import Herkunft, antwort_formular, lauf_knoepfe, meldung, routen as aktions_routen
 from . import web_html
 from .web_html import Roh, e, kicker, seite, t, verbinden
-from .web_kontingent import fenster_karte, kosten_aufgaben, kosten_laeufe
+from .web_kontingent import fenster_karte, kosten_aufgaben, kosten_laeufe, nacharbeit
 from .web_push import routen as push_routen
 from . import kurz as kurzfassung
 from .web_md import SCHEMA, inline, kurz_kasten, md
@@ -279,7 +279,9 @@ def lauf_kopf(l):
 def befunde(l):
     if not l.get('befunde'):
         return None
-    return t('ul', [t('li', t('strong', f'{b.get("nr", "")} ({b.get("schwere", "")})'), ' ', t('code', b.get('ort', '')),
+    return t('ul', [t('li', t('strong', f'{b.get("nr", "")} ({b.get("schwere", "")})'), ' ',
+                       t('span', ' · '.join(x for x in (b.get('kategorie'), b.get('kriterium')) if x), class_='leise') if b.get('kategorie') else None,
+                       ' ' if b.get('kategorie') else None, t('code', b.get('ort', '')),
                        ': ', b.get('was', '')) for b in l['befunde']], class_='befunde')
 
 
@@ -449,7 +451,7 @@ def aufgabe_seite(request):
                   ('Abnahme', inline(pz['kriterium'], verweise(name, pz['datei'])))]
     laufkarten = [t('article', lauf_kopf(l), t('p', lauf_link(l, l['id'])),
                     t('p', l['fehler'], class_='fehler') if l.get('fehler') else None,
-                    kurz_kasten(l.get('kurz')), befunde(l),
+                    kurz_kasten(l.get('kurz')), web_roadmap.kriterien_tabelle(l), befunde(l),
                     t('p', 'Bericht: ', md_link(name, l['bericht_datei'], l['branch'] if l.get('branch') in da else None))
                     if l.get('bericht_datei') else None,
                     t('details', t('summary', 'Log'), log_block(l, 60), open=l['zustand'] in laeufe.AKTIV),
@@ -484,7 +486,7 @@ def lauf_kurz(l):
     text = laeufe.ergebnis(l)
     if l.get('art') == 'review':  # das Ergebnis ist JSON; ältere Läufe haben kein Feld `kurz`
         try:
-            u = ablauf.urteil(text)
+            u = ablauf.urteil(text, ablauf.kriterien_soll(l))
         except Fehler:
             return ''
         return u['kurz'] or kurzfassung.aus_text(u['bericht'])
@@ -506,6 +508,7 @@ def lauf_seite(request):
         f'Lauf {l["id"]}', t('h1', 'Lauf ', t('span', l['id'], class_='leise')), meldung(request), kurz_kasten(lauf_kurz(l)), lauf_kopf(l), lauf_knoepfe(l, fehler=True),
         t('p', l['fehler'], class_='fehler') if l.get('fehler') else None,
         t('dl', [verbinden(t('dt', k), t('dd', v)) for k, v in felder], class_='zeile'),
+        abschnitt('Kriterien', web_roadmap.kriterien_tabelle(l)) if l.get('kriterien') else None,
         abschnitt('Befunde', befunde(l)) if l.get('befunde') else None,
         abschnitt('Log', log_block(l, 200)),
         abschnitt('Ergebnis', t('pre', ergebnis[-20000:], class_='log')) if ergebnis.strip() else None,
@@ -554,6 +557,9 @@ def kontingent_seite(request):
         t('p', 'Stand der letzten Messung in den Lauflogs von Claude und den Sitzungsdateien von Sol, ohne Hochrechnung. '
                '„unbekannt“: nichts gemessen oder das Fenster hat seitdem neu begonnen.', class_='leise'),
         abschnitt('Fenster', t('div', [fenster_karte(wer, daten, jetzt) for wer, daten in kontingent.stand(jetzt).items()], class_='karten')),
+        abschnitt('Nacharbeit', nacharbeit(kennzahlen.stand()),
+                  t('p', 'Aufgaben nach Auftragsart getrennt: mit K-Kriterien, wenn ihr Entwicklungs-, Nacharbeits- oder Review-Auftrag K-IDs nennt, sonst Altbestand. Befunde ohne '
+                         'Kategorie: „nicht zugeordnet“. Aktive Zeit: Entwicklung, Tests, Review und Nacharbeit beendeter Läufe, ohne Kontingentwartezeit und Zeit im Anhalten.', class_='leise'), id='nacharbeit'),
         abschnitt('Kosten je Aufgabe', kosten_aufgaben(je_aufgabe, aufgabe_link) if je_aufgabe else leer('Noch keine Läufe.'),
                   t('p', 'Nur Claude meldet Kosten (US-Dollar laut Lauflog); bei Sol steht ein Strich.', class_='leise'), id='aufgaben'),
         abschnitt('Kosten je Lauf', kosten_laeufe(je_lauf[:100], lauf_link, lauf_name, zeit, zustand) if je_lauf else leer('Noch keine Läufe.'),

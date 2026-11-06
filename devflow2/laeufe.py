@@ -33,7 +33,7 @@ TRAUM_FORT = 'Traumläufe werden nicht fortgesetzt; der nächste Traum beginnt i
 WEITER = 'Mach dort weiter, wo du durch das Kontingent unterbrochen wurdest.'
 WIEDER = 'Der Lauf wurde unterbrochen. Mach dort weiter, wo du aufgehört hast, und schließe den Auftrag ab.'
 FORMAT = ('Deine letzte Antwort war kein gültiges JSON nach dem vorgegebenen Schema. '
-          'Antworte jetzt ausschließlich mit diesem JSON (urteil, befunde, bericht).')
+          'Antworte jetzt ausschließlich mit diesem JSON (urteil, kurz, kriterien, befunde, bericht).')
 
 
 class TraumEnde(Exception):
@@ -293,6 +293,10 @@ def fortsetzen(lid):
         lauf = laden(lid)
         if not lauf.get('session') and lauf['modell'] in ('claude', 'sol'):
             lauf['session'] = _sitzung_im_log(lid)
+        # Zeit zwischen Anhalten/Fehler und Fortsetzen ist Pause; wurde in der Kontingentwartezeit angehalten, zählt sie ab deren Beginn (S15.4)
+        von = lauf.pop('wartet_seit', None) or lauf.get('ende')
+        if von:
+            lauf['pause'] = (lauf.get('pause') or 0) + max(0, jetzt() - von)
         lauf.update(zustand='wartet', fortsetzen=True, fortgesetzt=jetzt(), fehler=None, login=None, kind_pid=None, halt_herkunft=None)
         speichern(lauf)
         _halt_anfrage(lid).unlink(missing_ok=True)  # Rest eines abgebrochenen Anhaltens
@@ -559,10 +563,13 @@ def _modell_laufen(lauf, ablauf):
                 raise Fehler('Kontingent erschöpft: Der Messaufruf wurde abgelehnt')
             if lauf.get('traum'):
                 raise TraumEnde('Kontingent erschöpft: Traumläufe warten nicht auf die Freigabe')
-            lauf.update(zustand='kontingent', frei_ab=frei_ab(release))
+            t0 = jetzt()
+            lauf.update(zustand='kontingent', frei_ab=frei_ab(release), wartet_seit=t0)  # bleibt beim Anhalten stehen (S15.4)
             speichern(lauf)
             while jetzt() < lauf['frei_ab']:
                 time.sleep(min(30, max(0.2, lauf['frei_ab'] - jetzt())))
+            lauf['pause'] = (lauf.get('pause') or 0) + max(0, jetzt() - t0)  # Wartezeit, keine aktive Zeit (S15.4)
+            lauf.pop('wartet_seit', None)
             prompt = WEITER if lauf.get('session') else lauf['auftrag']
             lauf.update(zustand='wartet', frei_ab=None)
             _melden('kontingent-frei', lauf)
@@ -577,12 +584,12 @@ def _modell_laufen(lauf, ablauf):
             raise Fehler(f'Exit {rc}: {stderr.strip()[-800:] or result[-800:]}')
         if lauf['art'] == 'review':
             try:
-                ablauf.urteil(result)
-            except Fehler:
+                ablauf.urteil(result, ablauf.kriterien_soll(lauf))
+            except Fehler as e:
                 if lauf.get('formatnachfrage') or not lauf.get('session'):
                     raise
                 lauf['formatnachfrage'] = True
-                prompt = FORMAT
+                prompt = f'{FORMAT} Fehler: {e}'
                 continue
         lauf.pop('formatnachfrage', None)
         return

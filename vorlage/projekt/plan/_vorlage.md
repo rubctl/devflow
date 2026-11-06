@@ -26,11 +26,11 @@ Pflicht bei Projekten mit Fachlogik, sonst streichen: fachliche Abläufe, Regeln
 
 ## Aufgaben
 
-Feste Spalten, devflow liest diese Tabelle. Reihenfolge = Reihenfolge der Umsetzung. Entwickler: `claude` (Standard) oder `sol`. Bereich: Dateien und Ordner, mit denen der Lauf einsteigt. Stufe (legt der Inhaber bei der Abnahme fest): `leicht` (Sonnet, wenig Effort: UI, Doku, kleine Funktionen), `normal` (Sonnet, hoher Effort) oder `schwer` (Opus: Sicherheit, Datenwege, devflow selbst); leer = Stufe des Projekts. Berührt eine Aufgabe eine Kernzusage des Masterplans, beginnt ihr Abnahmekriterium mit `Kernzusage „…“:` und nennt den Test dazu; die Stufe richtet sich danach (Kernzusagen eher `schwer`). Das Review stuft einen Befund gegen eine Kernzusage mindestens als P2 ein.
+Feste Spalten, devflow liest diese Tabelle. Reihenfolge = Reihenfolge der Umsetzung. Entwickler: `claude` (Standard) oder `sol`. Bereich: Dateien und Ordner, mit denen der Lauf einsteigt. Stufe (legt der Inhaber bei der Abnahme fest): `leicht` (Sonnet, wenig Effort: UI, Doku, kleine Funktionen), `normal` (Sonnet, hoher Effort) oder `schwer` (Opus: Sicherheit, Datenwege, devflow selbst); leer = Stufe des Projekts. Das Abnahmekriterium besteht aus **nummerierten Kriterien** `K1: …<br>K2: …` (je Aufgabe mindestens eins, Nummern nicht doppelt; `plan_entwurf` lehnt neue Entwürfe sonst ab, ältere Pläne ohne Nummern gelten als Altbestand). Zusagen aus Ziel, Rahmen oder Fachlicher Abnahme, die für die Aufgabe gelten, stehen als eigenes K darin; ein Abschnittskopf erzeugt kein Kriterium. Berührt eine Aufgabe eine Kernzusage des Masterplans, beginnt das zugehörige K mit `Kernzusage „…“:` und nennt den Test dazu; die Stufe richtet sich danach (Kernzusagen eher `schwer`). Das Review stuft einen Befund gegen eine Kernzusage mindestens als P2 ein.
 
 | ID | Aufgabe | Entwickler | Bereich | Abnahmekriterium | Stufe |
 |---|---|---|---|---|---|
-| 1.1 | … | claude | … | … | normal |
+| 1.1 | … | claude | … | K1: …<br>K2: … | normal |
 
 ## Offene Fragen an den Inhaber
 

@@ -16,7 +16,7 @@ import shutil
 import sys
 
 from . import inhaber as _i
-from . import Fehler, auftraege, ereignis, grundlage, laeufe, projekte, repo, roadmap, schreiben, selbstlauf
+from . import Fehler, auftraege, ereignis, grundlage, kriterien, laeufe, projekte, repo, roadmap, schreiben, selbstlauf
 from .projekte import NAMEN, Projekt
 from .repo import git, ok, tag
 
@@ -87,9 +87,10 @@ def lage():
 def plan_zeile(p, aufgabe):
     for datei in sorted((p.repo / 'plan').glob('*.md')):
         if not datei.name.startswith('_'):
-            for row in roadmap.plan(datei.read_text(encoding='utf-8'))['aufgaben']:
-                if row['id'] == aufgabe:
-                    return {**row, 'datei': f'plan/{datei.name}'}
+            rows = roadmap.plan(datei.read_text(encoding='utf-8'))['aufgaben']
+            for row in rows:
+                if row['id'] == aufgabe:  # altbestand: der ganze Plan ohne K-Nummern (S15.1/S15.3)
+                    return {**row, 'datei': f'plan/{datei.name}', 'altbestand': kriterien.altbestand(rows)}
     return None
 
 
@@ -275,6 +276,11 @@ def _deploy_gesperrt(p, aufgabe_id):
     _gesperrt([f for f in offene_fragen(p) if aufgabe_id is None or f['bezug'] == aufgabe_id or gemergt(f['bezug'])])
 
 
+def _mit_k(k):
+    """Nannte der Auftrag K-Kriterien als Liste (S15.4)? Merkmal für die Kennzahlen, schon vor dem ersten Review."""
+    return bool(auftraege._kriterien_von(k)[1])
+
+
 def entwickeln(p, aufgabe_id, auftrag='', entwickler=None, automatisch=True):
     _bereit_zum_start(p, aufgabe_id)
     k = kontext(p, aufgabe_id)
@@ -295,7 +301,8 @@ def entwickeln(p, aufgabe_id, auftrag='', entwickler=None, automatisch=True):
         _stand(p, aufgabe_id, 'in Arbeit', f'Branch `{branch}`, Entwicklung läuft',
                wer=f'{NAMEN[entw]}, Review {NAMEN[_reviewer(p, entw)]}')
         l = laeufe.starten(p, 'entwickeln', entw, wt, auftraege.entwickeln(k), aufgabe=aufgabe_id, branch=branch,
-                           worktree=str(wt), entwickler=entw, automatisch=automatisch, zusatzauftrag=auftrag, **_stand_von(k))
+                           worktree=str(wt), entwickler=entw, automatisch=automatisch, zusatzauftrag=auftrag,
+                           kriterien_auftrag=_mit_k(k), **_stand_von(k))
     except Exception:
         ok(p.repo, 'worktree', 'remove', str(wt))
         ok(p.repo, 'branch', '-d', branch)
@@ -366,6 +373,7 @@ def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_ge
     rev = (reviewer or _reviewer(p, z['entwickler'])).lower()
     if rev not in NAMEN:
         raise Fehler(f'Reviewer {rev!r} unbekannt')
+    k['kriterien_soll'] = kriterien.soll(k['plan'])  # [] = ausdrücklich Altbestand; Plan mit K, Aufgabe ohne → Fehler
     if rev == z['entwickler']:
         raise Fehler(f'{NAMEN[rev]} hat {aufgabe_id} entwickelt; das Review macht das jeweils andere Modell')
     stand = _pruefstand(p, aufgabe_id, commit)
@@ -390,6 +398,7 @@ def review_anfordern(p, aufgabe_id, reviewer=None, automatisch=True, vorgaben_ge
                            branch=z['branch'], worktree=wt, review_worktree=str(rwt), commit=commit, runde=runde,
                            basis_commit=stand['basis'], test_commit=stand.get('getestet'), vorbereitung=stand['id'],
                            reviewer=rev, entwickler=z['entwickler'], schema=auftraege.REVIEW_SCHEMA,
+                           kriterien_soll=k['kriterien_soll'], altbestand=not k['kriterien_soll'],
                            automatisch=automatisch, **_stand_von(k))
     except Exception:
         _weg(rwt)
@@ -415,7 +424,7 @@ def _nacharbeit_starten(p, aufgabe_id, grund, details, automatisch, zaehlt=True,
     _stand(p, aufgabe_id, 'in Arbeit', 'Nacharbeit läuft')
     l = laeufe.starten(p, 'nacharbeit', z['entwickler'], z['worktree'], prompt, aufgabe=aufgabe_id, branch=z['branch'],
                        worktree=z['worktree'], entwickler=z['entwickler'], session=sitzung,
-                       automatisch=automatisch, zaehlt=zaehlt, **_stand_von(k), **extra)
+                       automatisch=automatisch, zaehlt=zaehlt, kriterien_auftrag=_mit_k(k), **_stand_von(k), **extra)
     return kurz(l)
 
 
@@ -738,8 +747,15 @@ def _nach_vorbereitung(p, lauf):
                      vorgaben_geaendert=lauf.get('vorgaben_geaendert'), vorbereitung=lauf)
 
 
-def urteil(text):
-    """Urteil aus der letzten Antwort des Reviewers; „bestanden“ mit P1/P2-Befund gilt als Nacharbeit."""
+def kriterien_soll(lauf):
+    """Erwartete K-IDs eines Reviewlaufs; `[]` bei Altbestand (`altbestand` am Lauf) und bei Läufen von vor S15.3."""
+    return list(lauf.get('kriterien_soll') or ())
+
+
+def urteil(text, soll=()):
+    """Urteil aus der letzten Antwort des Reviewers; „bestanden“ mit P1/P2-Befund gilt als Nacharbeit.
+    `soll`: erwartete K-IDs (S15.3). `kriterien` und Kategorien der Befunde prüft `kriterien.bewerten`; ein Formfehler ist wie ungültiges
+    JSON ein `Fehler` (der Laufprozess fragt einmal nach, sonst bleibt das Review fortsetzbar, nie bestanden). „nein“/„teilweise“ → P2."""
     kandidaten = [text.strip()]
     m = re.search(r'\{.*\}', text, re.S)
     if m:
@@ -751,10 +767,13 @@ def urteil(text):
             continue
         if (isinstance(d, dict) and d.get('urteil') in ('bestanden', 'nacharbeit') and isinstance(d.get('befunde'), list)
                 and isinstance(d.get('bericht'), str) and all(isinstance(b, dict) for b in d['befunde'])):
-            befunde = [{f: str(b.get(f, '')) for f in ('nr', 'schwere', 'ort', 'was')} for b in d['befunde']]
+            try:
+                ks, befunde = kriterien.bewerten(d, list(soll))
+            except Fehler as e:
+                raise Fehler(f'Review mit Formfehler: {e}') from None
             schwer = any(b['schwere'].upper().startswith(('P1', 'P2')) for b in befunde)
             k = d.get('kurz')
-            return dict(urteil='nacharbeit' if schwer else d['urteil'], befunde=befunde, bericht=d['bericht'],
+            return dict(urteil='nacharbeit' if schwer else d['urteil'], befunde=befunde, kriterien=ks, bericht=d['bericht'],
                         kurz='\n'.join(' '.join(z.split()) for z in k.splitlines() if z.strip()) if isinstance(k, str) else '')
     raise Fehler('Review ohne gültiges Urteil (JSON mit urteil, befunde, bericht erwartet)')
 
@@ -762,7 +781,7 @@ def urteil(text):
 def review_sichern(lauf):
     """Bericht auf den Branch committen (einmalig, `kopf` merkt den Stand), Kopie entfernen. Rückgabe: Urteil, Berichtsdatei."""
     aid, wt, rev = lauf['aufgabe'], lauf['worktree'], lauf['reviewer']
-    u = urteil(laeufe.ergebnis(lauf))
+    u = urteil(laeufe.ergebnis(lauf), kriterien_soll(lauf))
     name = {1: 'review', 2: 'nachreview'}.get(lauf['runde'], f'nachreview-{lauf["runde"] - 1}')
     datei = f'berichte/{aid}-{name}-{rev}.md'
     if not lauf.get('kopf'):
@@ -771,7 +790,7 @@ def review_sichern(lauf):
         schreiben(Path(wt) / datei, u['bericht'].rstrip() + '\n')
         git(wt, 'add', '--', datei)
         git(wt, 'commit', '-q', '-m', f'docs: {aid} Review {NAMEN[rev]} Runde {lauf["runde"]}: {u["urteil"]}')
-        lauf.update(urteil=u['urteil'], befunde=u['befunde'], kurz=u['kurz'], kopf=git(wt, 'rev-parse', 'HEAD'), bericht_datei=datei)
+        lauf.update(urteil=u['urteil'], befunde=u['befunde'], kriterien=u['kriterien'], kurz=u['kurz'], kopf=git(wt, 'rev-parse', 'HEAD'), bericht_datei=datei)
         laeufe.speichern(lauf)
     _weg(lauf['review_worktree'])
     return u, datei
@@ -787,7 +806,7 @@ def _nach_review(p, lauf):
         if lauf.get('automatisch'):
             mergen(p, aid, automatisch=True)
         return
-    befunde = '\n'.join(f'- {b["nr"]} ({b["schwere"]}) {b["ort"]}: {b["was"]}' for b in u['befunde'])
+    befunde = '\n'.join(auftraege.befund_zeile(b) for b in u['befunde'])
     _stand(p, aid, stand=f'Review {NAMEN[rev]} Runde {lauf["runde"]}: Nacharbeit, {len(u["befunde"])} Befunde ({datei})')
     if lauf.get('automatisch'):
         _runde_oder_frage(p, aid, f'Das Review von {NAMEN[rev]} verlangt Nacharbeit (Bericht {datei} auf deinem Branch).', befunde)
